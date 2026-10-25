@@ -1,0 +1,13 @@
+pub mod amr_configuration;
+pub mod bearer_rx;
+pub mod bearer_tx;
+pub mod broadcast;
+pub mod feedback;
+pub mod rach;
+pub mod sacch_tx;
+pub mod spach;
+pub mod traffic;
+pub mod traffic_order;
+pub mod traffic_tx;
+pub mod tsar;
+pub mod voice;

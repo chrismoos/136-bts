@@ -1,0 +1,7 @@
+sms_hub:
+  enabled: false
+  role: client
+  hub_addr: 192.0.2.10:2775
+  listen_addr: 127.0.0.1:2775
+  system_id: REPLACE_ME
+  password: REPLACE

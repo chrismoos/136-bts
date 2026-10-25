@@ -1,0 +1,17 @@
+pub mod acelp_cc1;
+pub mod acquisition;
+pub mod bit_errors;
+pub mod channel;
+pub mod color;
+pub mod control;
+pub mod dcch;
+pub mod facch;
+pub mod forward;
+pub mod modulation;
+pub mod pulse;
+pub mod rach;
+pub mod sacch;
+pub mod shortened;
+pub mod speech;
+pub mod sync;
+pub mod traffic;

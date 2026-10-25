@@ -1,0 +1,28 @@
+{
+  "name": "136-bts-operations",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "generate": "protoc -I ../proto --plugin=protoc-gen-es=./node_modules/.bin/protoc-gen-es --es_out=src/gen --es_opt=target=ts ../proto/operations.proto",
+    "build": "npm run generate && svelte-check --tsconfig ./tsconfig.json && vite build",
+    "dev": "vite",
+    "test": "playwright test",
+    "postgenerate": "node scripts/normalize-generated.mjs"
+  },
+  "dependencies": {
+    "@bufbuild/protobuf": "^2.0.0",
+    "@connectrpc/connect": "^2.0.0",
+    "@connectrpc/connect-web": "^2.0.0",
+    "@fontsource/ibm-plex-mono": "^5.3.0",
+    "@fontsource/ibm-plex-sans": "^5.3.0",
+    "svelte": "^5.0.0"
+  },
+  "devDependencies": {
+    "@bufbuild/protoc-gen-es": "^2.0.0",
+    "@playwright/test": "^1.0.0",
+    "@sveltejs/vite-plugin-svelte": "^6.0.0",
+    "svelte-check": "^4.0.0",
+    "typescript": "^5.0.0",
+    "vite": "^7.0.0"
+  }
+}

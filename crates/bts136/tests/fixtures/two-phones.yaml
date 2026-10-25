@@ -1,0 +1,31 @@
+radio:
+  kind: noop
+cell:
+  band: cellular800
+  channel: 1
+  sid: 42
+  dvcc: 1
+  access_power_level: 7
+  traffic_power_level: 7
+  control_slot: 1
+subscribers:
+  - identity:
+      kind: min34
+      value: 1
+    number: "1001"
+  - identity:
+      kind: min34
+      value: 2
+    number: "1002"
+core:
+  state_path: 136-bts.sqlite3
+logging:
+  filter: info
+  format: text
+calls:
+  answer_timeout_seconds: 60
+  radio_loss_timeout_seconds: 5
+
+web:
+  enabled: true
+  listen: 127.0.0.1:8080

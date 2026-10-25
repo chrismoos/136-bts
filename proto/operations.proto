@@ -1,0 +1,243 @@
+syntax = "proto3";
+package bts136.operations.v1;
+service Operations {
+  rpc GetSnapshot(Empty) returns (Snapshot);
+  rpc Watch(Empty) returns (stream Snapshot);
+  rpc ListSignaling(SignalingQuery) returns (SignalingPage);
+  rpc ListMessages(ListMessagesRequest) returns (MessagePage);
+  rpc ListSubscribers(SubscriberQuery) returns (SubscriberPage);
+  rpc ListObservedPhones(ObservedPhoneQuery) returns (ObservedPhonePage);
+  rpc ListCalls(CallQuery) returns (CallPage);
+  rpc ListEvents(EventQuery) returns (EventPage);
+  rpc SaveSubscriber(SaveSubscriberRequest) returns (CommandResult);
+  rpc DeleteSubscriber(SubscriberIdentity) returns (CommandResult);
+  rpc SendSms(SendSmsRequest) returns (CommandResult);
+  rpc StartCall(StartCallRequest) returns (CommandResult);
+  rpc ReleaseCall(ReleaseCallRequest) returns (CommandResult);
+  rpc SetMeasurements(SetMeasurementsRequest) returns (CommandResult);
+  rpc SendUserAlert(SendUserAlertRequest) returns (CommandResult);
+  rpc SendMessageWaiting(SendMessageWaitingRequest) returns (CommandResult);
+  rpc AuditSubscriber(AuditSubscriberRequest) returns (CommandResult);
+  rpc RequestCapabilities(SubscriberIdentity) returns (CommandResult);
+  rpc RequestStatus(RequestStatusRequest) returns (CommandResult);
+  rpc SetPhysicalControl(SetPhysicalControlRequest) returns (CommandResult);
+  rpc SendCallInformation(SendCallInformationRequest) returns (CommandResult);
+}
+message Empty {}
+enum CellPhase {
+  CELL_PHASE_UNSPECIFIED = 0; CELL_PHASE_STARTING = 1; CELL_PHASE_RUNNING = 2; CELL_PHASE_STOPPED = 3;
+  // The radio did not acknowledge the TX stop, so RF may still be on.
+  CELL_PHASE_STOP_UNCONFIRMED = 4;
+  CELL_PHASE_FAILED = 5;
+}
+enum TrunkState {
+  TRUNK_STATE_UNSPECIFIED = 0; TRUNK_STATE_DISABLED = 1; TRUNK_STATE_CONNECTING = 2; TRUNK_STATE_UP = 3;
+  TRUNK_STATE_BACKOFF = 4; TRUNK_STATE_STOPPED = 5;
+}
+message TrunkStatus { TrunkState state = 1; string detail = 2; string last_error = 3; uint64 queued = 4; }
+message RadioHealth { uint64 missed_slots_last_minute = 1; uint64 underflows_last_minute = 2; }
+enum CallPhase {
+  CALL_PHASE_UNSPECIFIED = 0; CALL_PHASE_PAGING = 1; CALL_PHASE_ESTABLISHING = 2; CALL_PHASE_ALERTING = 3;
+  CALL_PHASE_WAITING_ANSWER = 4; CALL_PHASE_CONNECTING = 5; CALL_PHASE_CONNECTED = 6; CALL_PHASE_RELEASING = 7;
+  CALL_PHASE_ENDED = 8;
+}
+enum BearerPhase {
+  BEARER_PHASE_UNSPECIFIED = 0; BEARER_PHASE_PAGING = 1; BEARER_PHASE_RESERVED = 2; BEARER_PHASE_ASSIGNING = 3;
+  BEARER_PHASE_ESTABLISHED = 4; BEARER_PHASE_STOPPING = 5; BEARER_PHASE_STOPPED = 6;
+}
+enum SmsPhase { SMS_PHASE_UNSPECIFIED = 0; SMS_PHASE_QUEUED = 1; SMS_PHASE_DELIVERED = 2; SMS_PHASE_FAILED = 3; }
+enum EventLevel {
+  EVENT_LEVEL_UNSPECIFIED = 0; EVENT_LEVEL_TRACE = 1; EVENT_LEVEL_DEBUG = 2; EVENT_LEVEL_INFO = 3;
+  EVENT_LEVEL_WARN = 4; EVENT_LEVEL_ERROR = 5;
+}
+message Metric { string name = 1; optional string value = 2; string unit = 3; string unavailable_reason = 4; }
+message Subscriber {
+  string identity = 1; string number = 2; bool registered = 3;
+  optional uint32 esn = 4; optional uint32 scm = 5;
+  optional uint64 last_registration_superframe = 6; optional string protocol_version = 7;
+  repeated Metric measurements = 8; SubscriberIdentity subscriber_id = 9;
+  optional int64 last_response_unix_ms = 10; optional int64 last_registration_unix_ms = 11; ReverseQuality reverse_quality = 12; optional uint32 provisioned_esn = 13;
+}
+message CallLeg {
+  reserved 6; string party = 1; string identity = 2; string number = 3; uint32 channel = 4; string slots = 5; repeated Metric measurements = 7; BearerPhase phase = 8;
+  // Audio source for a leg with no radio bearer, such as SIP or sample audio.
+  string source = 9;
+}
+message Call { reserved 2; uint64 id = 1; repeated CallLeg legs = 3; repeated Metric measurements = 4; CallPhase phase = 5; string end_reason = 6; }
+message Sms {
+  reserved 4;
+  int64 id = 1; string sender = 2; string recipient = 3; SmsPhase phase = 13;
+  int64 created_at_unix_ms = 5; uint32 message_reference = 6; optional string text = 7;
+  bytes pdu = 8; bool relay_accepted = 9; bool delivery_acknowledged = 10; bool manual_acknowledged = 11;
+  repeated Metric measurements = 12;
+}
+message Event { reserved 3; uint64 sequence = 1; int64 unix_ms = 2; EventLevel level = 7; string component = 4; string message = 5; string fields = 6; }
+message Snapshot {
+  reserved 3, 7, 9, 10, 11, 12, 13, 14, 15, 16, 17;
+  uint64 revision = 1; int64 unix_ms = 2; CellPhase phase = 18; string failure = 19;
+  RadioHealth health = 20; TrunkStatus sip = 21; TrunkStatus sms_hub = 22;
+  repeated Metric carrier = 4; repeated Metric radio = 5; repeated Metric service = 6;
+  repeated Call calls = 8;
+  uint32 registered_phones = 23;
+  // Absent when the SMS store cannot be read.
+  optional uint32 queued_sms = 24;
+  optional int64 last_uplink_unix_ms = 25;
+}
+message SendSmsRequest {
+  string request_id = 1;
+  string sender_number = 2;
+  string recipient_number = 3;
+  // IRA/Latin-1 text permits 248 characters, while other BMP text permits 124. Supplementary characters are unsupported.
+  string text = 4;
+}
+message StartCallRequest { SubscriberIdentity subscriber_id = 1; string calling_number = 2; }
+message ReleaseCallRequest { uint64 call_id = 1; }
+message CommandResult { optional int64 sms_id = 1; string message = 2; optional uint64 call_id = 3; }
+
+// Pages count from the newest row. A list with an exclusive before_id or before_sequence
+// keeps its offsets stable while new rows arrive.
+message ListMessagesRequest {
+  optional int64 before_id = 1; uint32 limit = 2; uint32 offset = 3;
+  // Unspecified lists every phase.
+  SmsPhase phase = 4;
+  // Matches the sender or the recipient.
+  string number = 5;
+}
+message MessagePage { reserved 2; repeated Sms messages = 1; uint32 total = 3; }
+
+enum SubscriberSort { SUBSCRIBER_SORT_NUMBER = 0; SUBSCRIBER_SORT_IDENTITY = 1; SUBSCRIBER_SORT_REGISTRATION = 2; }
+message SubscriberQuery {
+  string search = 1; SubscriberSort sort = 2; bool descending = 3; uint32 offset = 4; uint32 limit = 5;
+  // Exact matches. An ESN(n) identity also matches the subscriber provisioned with that ESN.
+  string identity = 6; string number = 7;
+}
+message SubscriberPage { repeated Subscriber subscribers = 1; uint32 total = 2; }
+message ObservedPhoneQuery { string identity = 1; uint32 offset = 2; uint32 limit = 3; }
+message ObservedPhonePage { repeated ObservedPhone phones = 1; uint32 total = 2; }
+message CallQuery { string identity = 1; uint32 offset = 2; uint32 limit = 3; }
+message CallPage { repeated Call calls = 1; uint32 total = 2; }
+message EventQuery {
+  // Unspecified lists every level.
+  EventLevel level = 1;
+  string component = 2; string search = 3; optional uint64 before_sequence = 4; uint32 offset = 5; uint32 limit = 6;
+}
+message EventPage { repeated Event events = 1; uint32 total = 2; repeated string components = 3; }
+
+message SubscriberIdentity {
+  uint32 kind = 1; uint64 value = 2;
+  // Selects an ESN provisioning record for deletion. Other commands require kind and value.
+  optional uint32 esn = 3;
+}
+message SaveSubscriberRequest { SubscriberIdentity subscriber_id = 1; string number = 2; optional uint32 esn = 3; }
+
+message WireMessage {
+  uint64 sequence = 1; int64 unix_ms = 2; string direction = 3; string channel = 4;
+  string identity = 5; string name = 6; string decoded = 7; bytes raw = 8;
+  uint32 bit_length = 9; string status = 10; bool broadcast = 11; uint64 repetitions = 12; ReverseQuality reverse_quality = 13;
+  // Subscriber number for the identity, empty when it has no subscriber record.
+  string number = 14;
+}
+
+enum CallParty { CALLER = 0; CALLEE = 1; }
+message SetMeasurementsRequest { uint64 call_id = 1; CallParty party = 2; bool enabled = 3; ExtendedMeasurements extended = 4; }
+
+message RequestStatusRequest { uint64 call_id = 1; CallParty party = 2; }
+
+message SetPhysicalControlRequest {
+  uint64 call_id = 1;
+  CallParty party = 2;
+  optional uint32 mobile_power_level = 3;
+  // Absolute timing advance from the standard reference position, in half-symbols, from 0 through 30.
+  optional uint32 timing_advance_half_symbols = 4;
+  // An explicit timing advance selects manual timing. Set this flag to resume automatic corrections.
+  optional bool automatic_timing = 5;
+}
+
+message WaitingMessage { uint32 kind = 1; uint32 count = 2; }
+message SendCallInformationRequest {
+  uint64 call_id = 1;
+  CallParty party = 2;
+  optional string calling_number = 3;
+  optional string calling_name = 4;
+  // 63 represents an unknown positive message count.
+  optional uint32 voice_messages = 5;
+  optional uint32 signal_code = 6;
+  repeated WaitingMessage other_messages = 7;
+}
+
+message AuditSubscriberRequest { SubscriberIdentity subscriber_id = 1; bool force_registration = 2; bool debug_display_allowed = 3; }
+
+message SendMessageWaitingRequest {
+  SubscriberIdentity subscriber_id = 1;
+  // Distinct kinds: voice 0, SMS 1, fax 2, user-specific 4–7. Count 0 clears, 63 means one or more with unknown total.
+  repeated WaitingMessage messages = 2;
+  optional string display = 3;
+}
+
+message ControlSignal {
+  // Medium 0, high 1, low 2.
+  uint32 pitch = 1;
+  // Off 0, standard long 1, other assigned cadences 2–12.
+  uint32 cadence = 2;
+  // 0–14 select 1–15 cadence cycles, 15 repeats continuously.
+  uint32 duration_code = 3;
+}
+message SendUserAlertRequest {
+  SubscriberIdentity subscriber_id = 1;
+  // Omission selects the standard medium-pitch long cadence repeated continuously.
+  ControlSignal signal = 2;
+  optional string display = 3;
+}
+
+
+enum ExtendedMeasurementKind {
+  EXTENDED_MEASUREMENT_UNSPECIFIED = 0;
+  EXTENDED_CARRIER_INTERFERENCE = 1;
+  EXTENDED_WORD_ERROR_RATE = 2;
+}
+enum MeasurementBand {
+  MEASUREMENT_CELLULAR_800 = 0;
+  MEASUREMENT_PCS_1900 = 1;
+  MEASUREMENT_CELLULAR_700 = 2;
+  MEASUREMENT_IMT_2000 = 3;
+}
+message MeasurementChannel { MeasurementBand band = 1; uint32 channel = 2; }
+message ExtendedMeasurements {
+  ExtendedMeasurementKind kind = 1;
+  // Ordered entries retain duplicates. An empty list requests serving-channel measurements only.
+  repeated MeasurementChannel channels = 2;
+}
+
+enum SignalingScope { PHONE_ACTIVITY = 0; ALL_PHONE_SIGNALING = 1; SYSTEM_BROADCASTS = 2; }
+message SignalingQuery {
+  SignalingScope scope = 1;
+  string identity = 2;
+  string direction = 3;
+  string search = 4;
+  reserved 5;
+  optional uint64 before_sequence = 6;
+  uint32 limit = 7;
+  uint32 offset = 8;
+  // Subscriber number. Selects that subscriber's identity.
+  string number = 9;
+}
+message SignalingPage {
+  reserved 2, 3;
+  repeated WireMessage messages = 1;
+  uint64 dropped_messages = 4;
+  uint32 total = 5;
+}
+
+message ObservedPhone { string identity = 1; int64 last_response_unix_ms = 2; string last_message = 3; ReverseQuality reverse_quality = 4; optional uint32 esn = 5; }
+
+message ReverseQuality {
+  double sync_evm_percent = 1;
+  double sync_level_dbfs = 2;
+  double frequency_offset_hz = 3;
+  double sync_correlation = 4;
+  int64 measured_unix_ms = 5;
+  // Coded bits the decoder corrected in the phone's recent CRC-valid uplink blocks, as a
+  // percentage of the coded bits checked. Absent until a block decodes.
+  optional double bit_error_percent = 6;
+  uint32 checked_bits = 7;
+}

@@ -1,0 +1,41 @@
+radio:
+  kind: network
+  addr: 127.0.0.1:50710
+  transport: tcp
+
+cell:
+  network_name: "TEST"
+  band: cellular800
+  channel: 991
+  sid: 4189
+  dvcc: 1
+  control_slot: 1
+  access_power_level: 7
+  traffic_power_level: 7
+core:
+  state_path: 136-bts.sqlite3
+logging:
+  filter: info
+  format: text
+calls:
+  ringback: us
+  answer_timeout_seconds: 60
+  radio_loss_timeout_seconds: 5
+
+web:
+  enabled: true
+  listen: 127.0.0.1:8090
+
+registration:
+  period_superframes: 94
+
+sip:
+  enabled: false
+
+sms_hub:
+  enabled: false
+
+realtime:
+  enabled: true
+  tx_priority: 80
+  rx_priority: 75

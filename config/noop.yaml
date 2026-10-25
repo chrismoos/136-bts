@@ -1,0 +1,34 @@
+radio:
+  kind: noop
+cell:
+  band: cellular800
+  channel: 1
+  sid: 42
+  dvcc: 1
+  access_power_level: 7
+  traffic_power_level: 7
+  control_slot: 1
+core:
+  state_path: 136-bts.sqlite3
+logging:
+  filter: info
+  format: text
+calls:
+  ringback: us
+  answer_timeout_seconds: 60
+  radio_loss_timeout_seconds: 5
+
+web:
+  enabled: true
+  listen: 127.0.0.1:8080
+
+sip:
+  enabled: false
+
+sms_hub:
+  enabled: false
+
+realtime:
+  enabled: false
+  tx_priority: 80
+  rx_priority: 75

@@ -1,0 +1,41 @@
+[workspace]
+resolver = "3"
+members = ["crates/bts136"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "Apache-2.0"
+publish = false
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_yaml_ng = "0.10"
+sdr-hal = { version = "0.1", features = ["config"] }
+rusqlite = { version = "0.40.2", features = ["bundled", "backup", "hooks"] }
+num-complex = "0.4"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+tracing-appender = "0.2"
+thread-priority = "3.1.1"
+rustix = { version = "1", features = ["process"] }
+audio_thread_priority = { version = "0.38", default-features = false }
+ctrlc = { version = "3.4", features = ["termination"] }
+tokio = { version = "1", features = ["rt-multi-thread", "net", "sync", "time", "macros"] }
+tokio-stream = { version = "0.1", features = ["sync", "net"] }
+tonic = "0.14"
+tonic-prost = "0.14"
+tonic-prost-build = "0.14"
+tonic-web = "0.14"
+prost = "0.14"
+axum = "0.8"
+rust-embed = { version = "8", features = ["debug-embed"] }
+tower = "0.5"
+
+jiff = "0.2"
+crossbeam-queue = "0.3"
+cdma-voice-gw = { git = "https://github.com/chrismoos/1xbts.git", rev = "c78698f49b5c4db39d4eb8812f8472c3bce537ff" }
+smpp-core = "0.1"

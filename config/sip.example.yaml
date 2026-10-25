@@ -1,0 +1,30 @@
+sip:
+  enabled: false
+  generate_ringback: true
+  listen_addr: 192.0.2.10:5060
+  transport: udp
+  request_uri_template: "sip:{called}@sip.example.com"
+  from_domain: sip.example.com
+  caller_id_override: "15555550100"
+  rtp_listen_addr: 192.0.2.10
+  rtp_advertise_addr: null
+  rtp_port_range: [16000, 16031]
+  jitter_buffer_ms: 60
+  max_call_seconds: 300
+  auth:
+    username: provider-account
+    password: replace-with-provider-password
+  registration:
+    registrar_uri: "sip:sip.example.com"
+    from_uri: "sip:15555550100@sip.example.com"
+    contact_user: "15555550100"
+    expires_secs: 300
+  nat:
+    mode: stun_latch
+    stun_server: stun.example.com:3478
+    stun_timeout_ms: 1000
+    rtp_latch_packets: 5
+    rtp_latch_interval_ms: 20
+  logging:
+    sip_trace: false
+    sip_sdp: false

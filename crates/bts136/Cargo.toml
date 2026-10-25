@@ -1,0 +1,53 @@
+[package]
+name = "bts136"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+jiff.workspace = true
+crossbeam-queue.workspace = true
+smpp-core.workspace = true
+cdma-voice-gw = { workspace = true, optional = true }
+serde.workspace = true
+serde_yaml_ng.workspace = true
+sdr-hal.workspace = true
+rusqlite.workspace = true
+num-complex.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+tracing-appender.workspace = true
+ctrlc.workspace = true
+
+tokio.workspace = true
+tokio-stream.workspace = true
+tonic.workspace = true
+tonic-prost.workspace = true
+tonic-web.workspace = true
+prost.workspace = true
+axum.workspace = true
+tower.workspace = true
+rust-embed.workspace = true
+
+[build-dependencies]
+tonic-prost-build.workspace = true
+
+[features]
+uhd = ["sdr-hal/uhd-backend"]
+network = ["sdr-hal/network-backend"]
+lime = ["sdr-hal/lime-backend"]
+bladerf = ["sdr-hal/bladerf-backend"]
+soapy = ["sdr-hal/soapy-backend"]
+
+sip-backend = ["dep:cdma-voice-gw"]
+
+[target.'cfg(target_os = "macos")'.dependencies]
+audio_thread_priority.workspace = true
+
+[target.'cfg(target_os = "linux")'.dependencies]
+thread-priority.workspace = true
+rustix.workspace = true
