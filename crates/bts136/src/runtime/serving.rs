@@ -51,12 +51,14 @@ const START_LEAD_MS: u64 = 100;
 const SLOT_SUBMISSION_LEAD_US: u64 = 5000;
 // Device clock reads are USB register reads on a USRP, costing up to a few milliseconds.
 const HARDWARE_TIME_REFRESH: Duration = Duration::from_millis(500);
+const TX_CLOCK_SETTLE: Duration = Duration::from_millis(100);
 const MICROSECONDS_PER_SECOND: u64 = 1000000;
 const MILLISECONDS_PER_SECOND: u64 = 1000;
 const SYMBOLS_PER_SLOT: usize = SLOT_BITS / 2;
 const PUBLIC_NETWORK: u8 = 0b100;
 const FBCCH_SLOTS: u8 = 4;
-const RX_TIMEOUT_US: i64 = 1000;
+// Short sample read timeouts break bladeRF RX streams.
+const RX_TIMEOUT_US: i64 = 250_000;
 const IDLE_WAIT_US: u64 = 100;
 // TIA-136-123-E Table 14 allows one superframe to prepare an R-DATA response.
 const MAX_RX_AGE_MS: u64 = super::timers::SUPERFRAME_MS;
@@ -429,7 +431,17 @@ fn serve(
         None
     };
     streams.tx.set_hardware_time_refresh(hardware_time_refresh);
-    let observation = streams.tx.prepared_observation()?;
+    let observation = if hardware_time_refresh.is_zero() {
+        streams.tx.prepared_observation()?
+    } else {
+        streams.rx.start(None)?;
+        let rx = &streams.rx;
+        streams.tx.enable_and_observe(TX_CLOCK_SETTLE, &mut || {
+            if let Err(error) = rx.hardware_time() {
+                tracing::debug!(%error, "RX clock refresh failed");
+            }
+        })?
+    };
     let wall_unix_ms = i64::try_from(
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)?

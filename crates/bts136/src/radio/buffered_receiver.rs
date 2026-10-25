@@ -62,7 +62,9 @@ impl BufferedReceiver {
             .receiver
             .as_mut()
             .ok_or_else(|| local(receiver::Failure::State))?;
-        receiver.start(tick)?;
+        if receiver.state() != receiver::State::Active {
+            receiver.start(tick)?;
+        }
         if !self.buffered {
             return Ok(());
         }

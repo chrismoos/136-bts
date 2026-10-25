@@ -292,7 +292,7 @@ fn failed_enable_is_stopped_and_invalid_samples_do_not_reach_the_backend() {
 
 #[test]
 fn every_reported_fault_or_counter_reset_invalidates_queue_even_after_the_scheduled_end() {
-    for fault in 0..4 {
+    for fault in 0..3 {
         let (mut tx, state) = stream();
         state.lock().unwrap().health.burst_acks = 1;
         tx.start(1000, 100000).unwrap();
@@ -302,8 +302,7 @@ fn every_reported_fault_or_counter_reset_invalidates_queue_even_after_the_schedu
             state.tick = 9000;
             match fault {
                 0 => state.health.sequence_errors = 1,
-                1 => state.health.dropped_packets = 1,
-                2 => state.health.unknown_events = 1,
+                1 => state.health.unknown_events = 1,
                 _ => state.health.burst_acks = 0,
             }
         }
@@ -322,6 +321,7 @@ fn every_reported_fault_or_counter_reset_invalidates_queue_even_after_the_schedu
         let mut state = state.lock().unwrap();
         state.tick = 9000;
         state.health.burst_acks = 1;
+        state.health.dropped_packets = 1;
     }
     let mut elapsed = Vec::with_capacity(4);
     tx.poll(&mut elapsed).unwrap();

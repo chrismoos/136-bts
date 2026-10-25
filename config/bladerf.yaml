@@ -1,0 +1,50 @@
+radio:
+  rx_bandwidth_hz: 200000
+  tx_bandwidth_hz: 200000
+  kind: blade_rf
+  device: ""
+  channel: 0
+  tx_antenna: TXA
+  rx_antenna: A_BALANCED
+  tx_gain_db: 60
+  rx_gain_db: 20 
+  tx_sample_rate_hz: 777600
+  buffer_size: 1024
+  num_buffers: 64
+  num_transfers: 32
+cell:
+  network_name: "TEST"
+  band: cellular800
+  channel: 991
+  sid: 4189
+  dvcc: 1
+  control_slot: 1
+  access_power_level: 7
+  traffic_power_level: 7
+core:
+  state_path: 136-bts.sqlite3
+logging:
+  filter: info
+  format: text
+calls:
+  ringback: us
+  answer_timeout_seconds: 60
+  radio_loss_timeout_seconds: 5
+
+web:
+  enabled: true
+  listen: 127.0.0.1:8090
+
+registration:
+  period_superframes: 94
+
+sip:
+  enabled: false
+
+sms_hub:
+  enabled: false
+
+realtime:
+  enabled: true
+  tx_priority: 80
+  rx_priority: 75

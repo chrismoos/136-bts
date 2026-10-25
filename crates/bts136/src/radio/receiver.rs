@@ -105,7 +105,8 @@ pub struct Receiver {
     pending_discontinuity: bool,
 }
 impl Receiver {
-    /// Timestamp quantization requires at least two clock ticks per sample. Use the applied final RX sample rate.
+    /// Timestamp quantization requires a whole number of clock ticks per sample, or at least two.
+    /// Use the applied final RX sample rate.
     pub fn try_new(
         rx: Box<dyn RadioRx>,
         sample_rate_hz: u64,
@@ -133,7 +134,10 @@ impl Receiver {
         if limits.max_block_samples == 0 || limits.timeout_us <= 0 {
             return Err(receiver.fail(Failure::Limits));
         }
-        if sample_rate_hz == 0 || u128::from(tick_rate_hz) < u128::from(sample_rate_hz) * 2 {
+        if sample_rate_hz == 0
+            || (!tick_rate_hz.is_multiple_of(sample_rate_hz)
+                && u128::from(tick_rate_hz) < u128::from(sample_rate_hz) * 2)
+        {
             return Err(receiver.fail(Failure::ClockRate {
                 tick_rate_hz,
                 sample_rate_hz,
@@ -143,6 +147,12 @@ impl Receiver {
     }
     pub(super) fn max_block_samples(&self) -> usize {
         self.limits.max_block_samples
+    }
+    /// On LimeSDR this also refreshes the time the TX stream reports.
+    pub fn hardware_time(&self) -> Result<u64, Error> {
+        self.rx
+            .get_hardware_time()
+            .map_err(|error| self.local(Failure::Hal(Box::new(error))))
     }
     pub fn state(&self) -> State {
         self.state

@@ -9,6 +9,8 @@ use std::{
 };
 
 const NANOS_PER_SECOND: u128 = 1_000_000_000;
+const CLOCK_SETTLE_POLL: Duration = Duration::from_millis(1);
+const MAX_CLOCK_READ_LAG: Duration = Duration::from_millis(15);
 #[derive(Debug, Clone, Copy)]
 pub struct Limits {
     pub max_queued_blocks: usize,
@@ -133,6 +135,7 @@ pub struct TimedTx {
     max_write_us: u64,
     last_slow_write_warning: Option<Instant>,
     burst_open: bool,
+    transmit_enabled: bool,
 }
 impl TimedTx {
     /// Sample rate must be the applied final IQ rate. Construction requests TX stop and never enables it.
@@ -166,6 +169,7 @@ impl TimedTx {
             max_write_us: 0,
             last_slow_write_warning: None,
             burst_open: false,
+            transmit_enabled: false,
         };
         stream
             .request_stop()
@@ -222,6 +226,56 @@ impl TimedTx {
         }
         self.observe(true).map_err(|failure| self.fail(failure))
     }
+    /// The epoch must come from this reading. bladeRF starts its TX counter only when TX is enabled.
+    /// `refresh` runs before each read, for radios whose TX time comes from the RX stream (LimeSDR).
+    pub fn enable_and_observe(
+        &mut self,
+        settle: Duration,
+        refresh: &mut dyn FnMut(),
+    ) -> Result<Observation, Error> {
+        if self.state != State::Prepared {
+            return Err(self.local(Failure::State));
+        }
+        refresh();
+        let before = self
+            .tx
+            .get_hardware_time()
+            .map_err(|error| self.fail(Failure::Hal(Box::new(error))))?;
+        self.tx
+            .enable_transmit(true)
+            .map_err(|error| self.fail(Failure::Hal(Box::new(error))))?;
+        self.transmit_enabled = true;
+        self.stop_acknowledged = false;
+        refresh();
+        let first = self
+            .tx
+            .get_hardware_time()
+            .map_err(|error| self.fail(Failure::Hal(Box::new(error))))?;
+        let deadline = Instant::now() + settle;
+        let mut settled = first;
+        while settled == first && Instant::now() < deadline {
+            std::thread::sleep(CLOCK_SETTLE_POLL);
+            refresh();
+            settled = self
+                .tx
+                .get_hardware_time()
+                .map_err(|error| self.fail(Failure::Hal(Box::new(error))))?;
+        }
+        self.last_tick = None;
+        self.last_device_tick = None;
+        self.clock_anchor = None;
+        refresh();
+        let observed = self.observe(true).map_err(|failure| self.fail(failure))?;
+        tracing::info!(
+            before_enable_tick = before,
+            first_after_enable_tick = first,
+            settled_tick = settled,
+            observed_tick = observed.hardware_tick,
+            restarted = settled < before,
+            "TX clock observed after enable"
+        );
+        Ok(observed)
+    }
     /// Epoch identifies the first IQ sample, including any caller-provided pre-roll and pulse-delay compensation.
     pub fn start(&mut self, epoch_tick: u64, stop_tick: u64) -> Result<(), Error> {
         if self.state != State::Prepared {
@@ -231,9 +285,12 @@ impl TimedTx {
         if epoch_tick <= observed.hardware_tick || stop_tick <= epoch_tick {
             return Err(self.local(Failure::Window));
         }
-        self.tx
-            .enable_transmit(true)
-            .map_err(|error| self.fail(Failure::Hal(Box::new(error))))?;
+        if !self.transmit_enabled {
+            self.tx
+                .enable_transmit(true)
+                .map_err(|error| self.fail(Failure::Hal(Box::new(error))))?;
+            self.transmit_enabled = true;
+        }
         self.stop_acknowledged = false;
         self.epoch_tick = epoch_tick;
         self.stop_tick = stop_tick;
@@ -498,6 +555,25 @@ impl TimedTx {
             });
         }
         self.last_device_tick = Some(tick);
+        // LimeSDR readings can trail the device by one RX block, so keep a bounded lead.
+        let tick = match self.clock_anchor {
+            Some((anchor, at)) if !self.hardware_time_refresh.is_zero() => {
+                let elapsed = now.duration_since(at).as_nanos() * u128::from(self.tick_rate_hz)
+                    / NANOS_PER_SECOND;
+                let estimate = anchor.saturating_add(u64::try_from(elapsed).unwrap_or(u64::MAX));
+                let max_lag = u64::try_from(
+                    MAX_CLOCK_READ_LAG.as_nanos() * u128::from(self.tick_rate_hz)
+                        / NANOS_PER_SECOND,
+                )
+                .unwrap_or(u64::MAX);
+                if estimate > tick {
+                    estimate.min(tick.saturating_add(max_lag))
+                } else {
+                    tick
+                }
+            }
+            _ => tick,
+        };
         // Anchoring at the start of the read makes extrapolation run ahead of the device, so
         // a cached reading can only overstate how late a slot is.
         self.clock_anchor = Some((tick, now));
@@ -554,6 +630,15 @@ impl TimedTx {
                 "Radio dropped late TX packets. Continuing the scheduled stream"
             );
         }
+        if let Some(previous) = self.last_health
+            && health.dropped_packets > previous.dropped_packets
+        {
+            tracing::warn!(
+                new_dropped_packets = health.dropped_packets - previous.dropped_packets,
+                total_dropped_packets = health.dropped_packets,
+                "Radio dropped TX packets. Continuing the scheduled stream"
+            );
+        }
         self.last_tick = Some(tick);
         self.last_health = Some(health);
         Ok(Observation {
@@ -566,6 +651,7 @@ impl TimedTx {
         self.stop_acknowledged = false;
         self.tx.stop()?;
         self.stop_acknowledged = true;
+        self.transmit_enabled = false;
         Ok(())
     }
     fn fail(&mut self, failure: Failure) -> Error {
@@ -588,7 +674,7 @@ fn unhealthy(previous: TxRadioHealth, current: TxRadioHealth) -> bool {
     current.underflows < previous.underflows
         || current.late_packets < previous.late_packets
         || current.sequence_errors != previous.sequence_errors
-        || current.dropped_packets != previous.dropped_packets
+        || current.dropped_packets < previous.dropped_packets
         || current.unknown_events != previous.unknown_events
         || current.burst_acks < previous.burst_acks
 }

@@ -43,7 +43,10 @@ impl Duplex {
     pub fn try_new(streams: RadioStreams, samples_per_symbol: usize) -> Result<Self, Error> {
         let tx = ForwardTx::try_new(streams.tx, samples_per_symbol)
             .map_err(|error| Self::local(Failure::Tx(Box::new(error))))?;
-        if streams.rx.state() != receiver::State::Prepared {
+        if !matches!(
+            streams.rx.state(),
+            receiver::State::Prepared | receiver::State::Active
+        ) {
             return Err(Self::local(Failure::State));
         }
         Ok(Self {

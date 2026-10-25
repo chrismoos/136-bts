@@ -361,3 +361,29 @@ fn entirely_repeated_block_is_dropped_and_next_fresh_data_resets_acquisition() {
     assert_eq!(next.segment, 1);
     assert!(state.lock().unwrap().active);
 }
+
+#[test]
+fn sample_counting_clock_is_accepted_and_keeps_reads_contiguous() {
+    let state = Arc::new(Mutex::new(Device {
+        reads: vec![read(1000, 32), read(1032, 32), read(1080, 32)].into(),
+        rate_hz: Some(194400),
+        ..Device::default()
+    }));
+    let mut rx = Receiver::try_new(
+        Box::new(Fake(state)),
+        194400,
+        Limits {
+            max_block_samples: 32,
+            timeout_us: 1000,
+        },
+    )
+    .unwrap();
+    rx.start(None).unwrap();
+    assert_eq!(block(&mut rx).continuity, Continuity::First);
+    let second = block(&mut rx);
+    assert_eq!(second.continuity, Continuity::Continuous);
+    assert_eq!(second.first_sample, 32);
+    let third = block(&mut rx);
+    assert!(matches!(third.continuity, Continuity::Gap { .. }));
+    assert_eq!(third.first_sample, 80);
+}
