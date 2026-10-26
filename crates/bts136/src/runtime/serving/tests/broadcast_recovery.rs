@@ -38,6 +38,7 @@ fn changed_startup_broadcast_crosses_iq_and_confirms_before_registration() {
         let shutdown = Arc::new(AtomicBool::new(false));
         let state = Arc::new(Mutex::new(Backend {
             sample: 0,
+            clock_sample: 0,
             tx_observation_offset_ticks: 0,
             epoch: None,
             tx: Vec::new(),

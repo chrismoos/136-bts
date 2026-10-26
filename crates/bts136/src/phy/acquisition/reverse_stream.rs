@@ -1,5 +1,6 @@
 use super::{
-    AcquiredSlot, AcquisitionError, AcquisitionWorkspace, FILTER_HALF_SPAN_SYMBOLS, SLOT_SYMBOLS,
+    AcquiredSlot, AcquisitionError, AcquisitionWorkspace, FILTER_HALF_SPAN_SYMBOLS, MatchedFilter,
+    SLOT_SYMBOLS, StartBounds,
 };
 use crate::phy::{
     modulation::Symbol,
@@ -41,6 +42,8 @@ pub struct Burst<T = TrafficFields> {
 }
 pub struct ReverseStream<T = TrafficFields> {
     workspace: AcquisitionWorkspace,
+    matched: MatchedFilter,
+    incoming: Vec<Symbol>,
     samples: Vec<Symbol>,
     candidates: Vec<AcquiredSlot<T>>,
     decode_window: WindowDecoder<T>,
@@ -61,6 +64,7 @@ type WindowDecoder<T> = Box<
     dyn FnMut(
             &mut AcquisitionWorkspace,
             &[Symbol],
+            StartBounds,
             &mut Vec<AcquiredSlot<T>>,
         ) -> Result<(), AcquisitionError>
         + Send,
@@ -73,7 +77,9 @@ impl ReverseStream<TrafficFields> {
         Self::with_decoder(
             sample_rate_hz,
             max_bursts,
-            Box::new(|workspace, samples, output| workspace.reverse_traffic(samples, output)),
+            Box::new(|workspace, samples, bounds, output| {
+                workspace.reverse_traffic_window(samples, Some(bounds), output)
+            }),
             Some(super::channel_profile::estimate),
         )
     }
@@ -83,7 +89,9 @@ impl ReverseStream<ShortenedBurst> {
         Self::with_decoder(
             sample_rate_hz,
             max_bursts,
-            Box::new(|workspace, samples, output| workspace.shortened(samples, output)),
+            Box::new(|workspace, samples, bounds, output| {
+                workspace.shortened_window(samples, Some(bounds), output)
+            }),
             None,
         )
     }
@@ -98,8 +106,8 @@ impl ReverseStream<ReverseControlFields> {
         Self::with_decoder(
             sample_rate_hz,
             max_bursts,
-            Box::new(move |workspace, samples, output| {
-                workspace.reverse_control(samples, format, dvcc, output)
+            Box::new(move |workspace, samples, bounds, output| {
+                workspace.reverse_control_window(samples, format, dvcc, Some(bounds), output)
             }),
             None,
         )
@@ -127,6 +135,13 @@ impl<T> ReverseStream<T> {
             + (samples_per_symbol * 2.0).ceil() as usize;
         let workspace = AcquisitionWorkspace::try_new(sample_rate_hz, window_samples)
             .map_err(Error::Acquisition)?;
+        let matched = MatchedFilter::try_new(sample_rate_hz)
+            .map_err(|error| Error::Acquisition(AcquisitionError::Pulse(error)))?;
+        let mut incoming = Vec::new();
+        incoming
+            .try_reserve_exact(hop_samples)
+            .map_err(Error::Allocation)?;
+        incoming.resize(hop_samples, Symbol { i: 0.0, q: 0.0 });
         let mut samples = Vec::new();
         samples
             .try_reserve_exact(window_samples)
@@ -137,6 +152,8 @@ impl<T> ReverseStream<T> {
             .map_err(Error::Allocation)?;
         Ok(Self {
             workspace,
+            matched,
+            incoming,
             decode_window,
             channel_profiler,
             samples,
@@ -161,6 +178,7 @@ impl<T> ReverseStream<T> {
         self.hop_samples
     }
     pub fn discontinuity(&mut self) {
+        self.matched.reset();
         self.samples.clear();
         self.candidates.clear();
         self.segment = None;
@@ -170,6 +188,36 @@ impl<T> ReverseStream<T> {
     }
     /// Supply contiguous sample indices within each segment. Changed segments discard retained IQ. Reserve max_bursts output slots.
     pub fn push(
+        &mut self,
+        segment: u64,
+        first_sample: u64,
+        samples: &[Symbol],
+        output: &mut Vec<Burst<T>>,
+    ) -> Result<(), Error> {
+        self.admit(segment, first_sample, samples, output)?;
+        let mut incoming = std::mem::take(&mut self.incoming);
+        self.matched.process(samples, &mut incoming);
+        let result = self.ingest(samples, &incoming[..samples.len()], output);
+        self.incoming = incoming;
+        result
+    }
+    /// Like `push`, with `filtered` taken from one `MatchedFilter` that has seen every sample of
+    /// the segment in order. The caller resets that filter whenever the segment changes.
+    pub fn push_filtered(
+        &mut self,
+        segment: u64,
+        first_sample: u64,
+        samples: &[Symbol],
+        filtered: &[Symbol],
+        output: &mut Vec<Burst<T>>,
+    ) -> Result<(), Error> {
+        if filtered.len() != samples.len() {
+            return Err(Error::Input);
+        }
+        self.admit(segment, first_sample, samples, output)?;
+        self.ingest(samples, filtered, output)
+    }
+    fn admit(
         &mut self,
         segment: u64,
         first_sample: u64,
@@ -206,9 +254,17 @@ impl<T> ReverseStream<T> {
         }
         output.clear();
         self.next_sample = next;
+        Ok(())
+    }
+    fn ingest(
+        &mut self,
+        samples: &[Symbol],
+        filtered: &[Symbol],
+        output: &mut Vec<Burst<T>>,
+    ) -> Result<(), Error> {
         let available = self.window_samples - self.samples.len();
         let first = samples.len().min(available);
-        self.samples.extend_from_slice(&samples[..first]);
+        self.append(&samples[..first], &filtered[..first]);
         if self.samples.len() == self.window_samples {
             if let Err(error) = self.decode(false, output) {
                 self.state = State::Failed;
@@ -218,11 +274,19 @@ impl<T> ReverseStream<T> {
             self.samples.copy_within(self.hop_samples.., 0);
             self.samples
                 .truncate(self.window_samples - self.hop_samples);
+            self.workspace
+                .filtered_mut()
+                .copy_within(self.hop_samples..self.window_samples, 0);
             self.window_first_sample += self.hop_samples as u64;
             self.initial_window = false;
         }
-        self.samples.extend_from_slice(&samples[first..]);
+        self.append(&samples[first..], &filtered[first..]);
         Ok(())
+    }
+    fn append(&mut self, samples: &[Symbol], filtered: &[Symbol]) {
+        let start = self.samples.len();
+        self.workspace.filtered_mut()[start..start + filtered.len()].copy_from_slice(filtered);
+        self.samples.extend_from_slice(samples);
     }
     pub fn finish(&mut self, output: &mut Vec<Burst<T>>) -> Result<(), Error> {
         if self.state != State::Ready {
@@ -241,17 +305,26 @@ impl<T> ReverseStream<T> {
         Ok(())
     }
     fn decode(&mut self, final_window: bool, output: &mut Vec<Burst<T>>) -> Result<(), Error> {
-        (self.decode_window)(&mut self.workspace, &self.samples, &mut self.candidates)
-            .map_err(Error::Acquisition)?;
-        if self.candidates.len() > self.max_bursts {
-            return Err(Error::OutputCapacity);
-        }
         let lower = if self.initial_window {
             0.0
         } else {
             self.prefix_samples as f64 - self.samples_per_symbol
         };
         let upper = (self.hop_samples + self.prefix_samples) as f64 + self.samples_per_symbol;
+        let bounds = StartBounds {
+            lower,
+            upper: if final_window { f64::INFINITY } else { upper },
+        };
+        (self.decode_window)(
+            &mut self.workspace,
+            &self.samples,
+            bounds,
+            &mut self.candidates,
+        )
+        .map_err(Error::Acquisition)?;
+        if self.candidates.len() > self.max_bursts {
+            return Err(Error::OutputCapacity);
+        }
         for acquired in self.candidates.drain(..) {
             let local = acquired.slot_start_sample;
             let first_sample = self.window_first_sample as f64 + local;

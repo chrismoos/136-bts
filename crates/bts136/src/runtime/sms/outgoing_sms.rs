@@ -386,6 +386,7 @@ impl SmsRuntime {
         let offer = DeliveryOffer {
             recipient: peer,
             queued,
+            time_zone: self.core().time_zone(),
         };
         if fits(route, &offer.relay(0)) {
             return Ok(());

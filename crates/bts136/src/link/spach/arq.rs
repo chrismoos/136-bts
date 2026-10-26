@@ -48,6 +48,8 @@ pub enum ArqFrame {
     },
     Continue {
         header: ArqHeader,
+        /// Header B identity type of the transaction's MSID. MIN-only handsets ignore other types.
+        identity_type: u8,
         frame_number: u8,
         /// The received data region includes zero filler when the message ends in this frame.
         data: [bool; CONTINUE_DATA_BITS],
@@ -60,7 +62,11 @@ impl ArqFrame {
             Self::Begin {
                 header, identity, ..
             } => (header, BEGIN, identity.parts().0),
-            Self::Continue { header, .. } => (header, CONTINUE, 0),
+            Self::Continue {
+                header,
+                identity_type,
+                ..
+            } => (header, CONTINUE, *identity_type),
         };
         if header.channel == Channel::Pch {
             return Err(SpachError::UnsupportedUsage);
@@ -183,6 +189,7 @@ pub fn fragment_message(
         data[..chunk.len()].copy_from_slice(chunk);
         frames.push(ArqFrame::Continue {
             header,
+            identity_type: identity.parts().0,
             frame_number: frame_number as u8,
             data,
         });
@@ -201,16 +208,21 @@ pub fn decode(bits: &[bool]) -> Result<ArqFrame, SpachError> {
         return Err(SpachError::UnsupportedUsage);
     }
     let kind = reader.take(TYPE_BITS)?;
-    let identity = match kind {
+    enum Address {
+        Begin(MobileIdentity),
+        Continue(u8),
+    }
+    let address = match kind {
         BEGIN => {
             let (identity, reservation_response) = read_address(&mut reader)?;
             flags.reservation_response = reservation_response;
-            Some(identity)
+            Address::Begin(identity)
         }
         CONTINUE => {
-            reader.take(IDENTITY_TYPE_BITS + FLAG_BITS)?;
+            let identity_type = reader.take(IDENTITY_TYPE_BITS)? as u8;
+            reader.take(FLAG_BITS)?;
             flags.reservation_response = reader.take(FLAG_BITS)? != 0;
-            None
+            Address::Continue(identity_type)
         }
         _ => return Err(SpachError::UnsupportedFrame),
     };
@@ -231,35 +243,39 @@ pub fn decode(bits: &[bool]) -> Result<ArqFrame, SpachError> {
         polling,
         response_mode,
     };
-    if let Some(identity) = identity {
-        let message_octets = reader.take(LENGTH_BITS)? as u8;
-        let data = bits[reader.offset..].to_vec();
-        let message_bits = usize::from(message_octets) * OCTET_BITS;
-        if data
-            .get(message_bits..)
-            .is_some_and(|suffix| suffix.iter().any(|bit| *bit))
-        {
-            return Err(SpachError::Filler);
+    match address {
+        Address::Begin(identity) => {
+            let message_octets = reader.take(LENGTH_BITS)? as u8;
+            let data = bits[reader.offset..].to_vec();
+            let message_bits = usize::from(message_octets) * OCTET_BITS;
+            if data
+                .get(message_bits..)
+                .is_some_and(|suffix| suffix.iter().any(|bit| *bit))
+            {
+                return Err(SpachError::Filler);
+            }
+            Ok(ArqFrame::Begin {
+                header,
+                identity,
+                message_octets,
+                data,
+            })
         }
-        Ok(ArqFrame::Begin {
-            header,
-            identity,
-            message_octets,
-            data,
-        })
-    } else {
-        let frame_number = reader.take(FRAME_NUMBER_BITS)? as u8;
-        if usize::from(frame_number) >= ARQ_MAP_BITS {
-            return Err(SpachError::FrameNumber);
+        Address::Continue(identity_type) => {
+            let frame_number = reader.take(FRAME_NUMBER_BITS)? as u8;
+            if usize::from(frame_number) >= ARQ_MAP_BITS {
+                return Err(SpachError::FrameNumber);
+            }
+            let data = bits[reader.offset..]
+                .try_into()
+                .expect("ARQ CONTINUE carries 79 data bits");
+            Ok(ArqFrame::Continue {
+                header,
+                identity_type,
+                frame_number,
+                data,
+            })
         }
-        let data = bits[reader.offset..]
-            .try_into()
-            .expect("ARQ CONTINUE carries 79 data bits");
-        Ok(ArqFrame::Continue {
-            header,
-            frame_number,
-            data,
-        })
     }
 }
 
@@ -325,6 +341,7 @@ mod tests {
         for frame_number in 0..ARQ_MAP_BITS as u8 {
             let frame = ArqFrame::Continue {
                 header: header(),
+                identity_type: 0,
                 frame_number,
                 data: [true; CONTINUE_DATA_BITS],
             };
@@ -342,12 +359,35 @@ mod tests {
         assert_eq!(
             ArqFrame::Continue {
                 header: header(),
+                identity_type: 0,
                 frame_number: 26,
                 data: [false; CONTINUE_DATA_BITS]
             }
             .encode(),
             Err(SpachError::FrameNumber)
         );
+    }
+    #[test]
+    fn continuations_carry_the_transaction_identity_type() {
+        let message = [0x5a; 40];
+        for (identity, idt) in [
+            (MobileIdentity::Tmsi20(1), "00"),
+            (MobileIdentity::Tmsi24(1), "01"),
+            (MobileIdentity::Min34(1), "10"),
+            (MobileIdentity::Imsi50(1), "11"),
+        ] {
+            let frames = fragment_message(header(), identity, &message).unwrap();
+            assert!(frames.len() > 1);
+            for frame in &frames[1..] {
+                let bits = frame.encode().unwrap();
+                let header_b: String = bits[HEADER_A_BITS..HEADER_A_BITS + HEADER_B_BITS]
+                    .iter()
+                    .map(|bit| if *bit { '1' } else { '0' })
+                    .collect();
+                assert_eq!(header_b, format!("110{idt}00"));
+                assert_eq!(&decode(&bits).unwrap(), frame);
+            }
+        }
     }
     #[test]
     fn begin_preserves_identity_length_polling_and_padding() {
@@ -392,6 +432,7 @@ mod tests {
         assert_eq!(
             ArqFrame::Continue {
                 header: invalid,
+                identity_type: 0,
                 frame_number: 0,
                 data: [false; CONTINUE_DATA_BITS]
             }

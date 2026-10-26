@@ -423,7 +423,7 @@ fn foreign_bearer_stop_and_ack_handles_and_regressing_clocks_cannot_complete_a_c
 }
 
 #[test]
-fn radio_failure_stops_immediately_without_signaling_wait_and_invalidates_pending_connect_ack() {
+fn radio_failure_stops_the_lost_leg_and_releases_the_surviving_leg() {
     let mut session = session();
     let handles = establish(&mut session);
     alert(&mut session, &handles);
@@ -440,11 +440,19 @@ fn radio_failure_stops_immediately_without_signaling_wait_and_invalidates_pendin
     );
     assert!(!session.media_ready());
     assert!(session.stopped_handle().is_none());
-    for party in [Party::Caller, Party::Callee] {
-        assert!(session.order(party).is_none());
-        let stop = session.stop_request(party).unwrap().clone();
-        session.bearer_stopped(&stop, 70).unwrap();
-    }
+    assert!(session.order(Party::Caller).is_none());
+    let lost = session.stop_request(Party::Caller).unwrap().clone();
+    session.bearer_stopped(&lost, 70).unwrap();
+    assert!(session.stop_request(Party::Callee).is_none());
+    let release = session.order(Party::Callee).unwrap().clone();
+    session
+        .order_transmitted(&handles[1], &release, 70)
+        .unwrap();
+    session
+        .receive(&handles[1], &mobile_ack(OrderKind::Release), 80)
+        .unwrap();
+    let surviving = session.stop_request(Party::Callee).unwrap().clone();
+    session.bearer_stopped(&surviving, 90).unwrap();
     assert_eq!(
         session.state(),
         CallState::Stopped(EndReason::RadioFailure(Party::Caller))

@@ -174,8 +174,8 @@ impl TrafficMessage {
             Self::Release { information } => Some(information.encode_octets()?),
             Self::Ack { information, .. } => Some(information.encode_octets()?),
             Self::AlertWithInfo { information } => Some(information.encode_octets()?),
-            Self::PhysicalControl(fields) => Some(fields.encode_octets(false)?),
-            Self::PhysicalControlAck(fields) => Some(fields.encode_octets(true)?),
+            Self::PhysicalControl(fields) => Some(fields.encode_octets()?),
+            Self::PhysicalControlAck(fields) => Some(fields.encode_octets()?),
             Self::StatusRequest(fields) => {
                 fields.validate_request()?;
                 Some(fields.encode_octets()?)
@@ -477,13 +477,13 @@ fn decode_prefix_in_context(
         .collect::<Result<Vec<_>, _>>()?;
     let message = match kind {
         PHYSICAL_CONTROL | PHYSICAL_CONTROL_ACK => {
-            let fields = physical_control::decode(&optional_octets, kind == PHYSICAL_CONTROL_ACK)
-                .map_err(|error| match error {
-                TrafficMessageError::Truncated { .. } => {
-                    TrafficMessageError::Field("physical_control_length")
-                }
-                error => error,
-            })?;
+            let fields =
+                physical_control::decode(&optional_octets).map_err(|error| match error {
+                    TrafficMessageError::Truncated { .. } => {
+                        TrafficMessageError::Field("physical_control_length")
+                    }
+                    error => error,
+                })?;
             if kind == PHYSICAL_CONTROL {
                 TrafficMessage::PhysicalControl(fields)
             } else {

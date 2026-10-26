@@ -92,17 +92,17 @@ fn later_control_extensions_match_fixed_counted_vectors() {
 }
 
 #[test]
-fn ack_requires_all_requested_fields_and_an_absolute_result() {
+fn ack_requires_all_requested_fields() {
     let request = request();
     let mut actual = PhysicalControlFields {
         control: request,
         ..Default::default()
     };
-    assert!(!request.answered_by(&actual));
+    assert!(request.answered_by(&actual));
     assert!(
         TrafficMessage::PhysicalControlAck(actual.clone())
             .encode()
-            .is_err()
+            .is_ok()
     );
     actual.control.time_alignment = Some(TimeAlignment::OffsetUnits(30));
     actual.control.power_level = Some(10);
@@ -222,4 +222,17 @@ fn partial_control_reports_retain_other_confirmed_settings_and_replace_dtx_forma
         ..Default::default()
     });
     assert_eq!(confirmed.dtx_mode, None);
+}
+
+#[test]
+fn ack_reporting_maintained_time_alignment_is_accepted() {
+    let ack = literal(
+        "00 10010001 000111 0010 000001 0111 0011 000001 11111 0100 000001 0 0101 000001 0 00000",
+    );
+    let TrafficMessage::PhysicalControlAck(fields) =
+        decode_prefix_in(&ack, Direction::Reverse).unwrap().message
+    else {
+        panic!("expected a Physical Layer Control Ack");
+    };
+    assert_eq!(fields.control.time_alignment, Some(TimeAlignment::Maintain));
 }

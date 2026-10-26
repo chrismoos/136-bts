@@ -57,6 +57,13 @@ const PAGE_RESPONSE: u8 = 8;
 const ESTABLISHMENT_MS: u64 = 5000;
 const ORDER_RESPONSE_MS: u64 = 500;
 const ORDER_TRANSMISSIONS: u16 = 3;
+// A lost Mobile Ack to Alert With Info drops the call, so alerting retries until setup expires.
+const ALERT_TRANSMISSIONS: u16 = (ESTABLISHMENT_MS / ORDER_RESPONSE_MS) as u16;
+const ALERT_ORDER: OrderPolicy = OrderPolicy {
+    response_timeout_ms: ORDER_RESPONSE_MS,
+    overall_timeout_ms: ESTABLISHMENT_MS,
+    max_transmissions: ALERT_TRANSMISSIONS,
+};
 const CALL_HISTORY_CAPACITY: usize = 64;
 const MAX_SMS_INBOX: usize = 32;
 const MAX_POWER_DOWN_REPORTS: usize = 32;
@@ -581,7 +588,7 @@ impl VoiceRuntime {
                             establishment_timeout_ms: ESTABLISHMENT_MS,
                             answer_timeout_ms: self.answer_ms,
                             release_timeout_ms: ESTABLISHMENT_MS,
-                            alert: order,
+                            alert: ALERT_ORDER,
                             release: order,
                             measurements: order,
                             status: order,
@@ -608,7 +615,7 @@ impl VoiceRuntime {
             establishment_timeout_ms: ESTABLISHMENT_MS,
             answer_timeout_ms: self.answer_ms,
             release_timeout_ms: ESTABLISHMENT_MS,
-            alert: order,
+            alert: ALERT_ORDER,
             release: order,
             measurements: order,
             status: order,
@@ -2674,7 +2681,6 @@ pub(crate) fn page_response_rejection_cause(
         Some(
             PagingError::Wire(_)
                 | PagingError::Options(_)
-                | PagingError::OptionalElements
                 | PagingError::DuplicateResponse
                 | PagingError::MissingResponse
                 | PagingError::NotTransmitted

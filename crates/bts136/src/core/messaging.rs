@@ -79,6 +79,8 @@ struct SubmissionParties<'a> {
 pub struct DeliveryOffer {
     pub recipient: MobileIdentity,
     pub queued: QueuedSms,
+    /// Cell time zone for the Message Center Time Stamp. Without it the DELIVER has no time stamp.
+    pub time_zone: Option<crate::l3::time_date::TimeZoneOffset>,
 }
 impl DeliveryOffer {
     pub fn relay(&self, transaction_id: u8) -> AddressedRelay {
@@ -86,7 +88,16 @@ impl DeliveryOffer {
             message: RelayMessage::Data {
                 transaction_id,
                 protocol: HigherLayerProtocol::Sms,
-                payload: self.queued.sms_pdu.clone(),
+                payload: self
+                    .time_zone
+                    .and_then(|time_zone| {
+                        sms::with_time_stamp(
+                            &self.queued.sms_pdu,
+                            self.queued.created_at_unix_ms,
+                            time_zone,
+                        )
+                    })
+                    .unwrap_or_else(|| self.queued.sms_pdu.clone()),
             },
             addresses: RelayAddresses {
                 originating: Some(AddressInfo {
@@ -144,7 +155,7 @@ pub enum MessagingError {
 }
 impl fmt::Display for MessagingError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "local SMS handling failed: {self:?}")
+        write!(f, "subscriber core request failed: {self:?}")
     }
 }
 impl Error for MessagingError {}
@@ -172,6 +183,7 @@ impl From<SmsError> for MessagingError {
 pub struct LocalMessaging {
     sms_hub_enabled: bool,
     display_time: DisplayTime,
+    time_zone: Option<crate::l3::time_date::TimeZoneOffset>,
     sms_hub_status: Option<crate::sms_hub::StatusHandle>,
     devices: Vec<super::store::DeviceSubscriber>,
     registry: LocalRegistry,
@@ -198,6 +210,7 @@ impl LocalMessaging {
             devices,
             sms_hub_enabled: false,
             display_time: crate::config::SmsDisplayTime::default().wire(),
+            time_zone: None,
             sms_hub_status: None,
         })
     }
@@ -214,6 +227,12 @@ impl LocalMessaging {
     }
     pub(crate) fn set_display_time(&mut self, display_time: DisplayTime) {
         self.display_time = display_time;
+    }
+    pub(crate) fn set_time_zone(&mut self, time_zone: crate::l3::time_date::TimeZoneOffset) {
+        self.time_zone = Some(time_zone);
+    }
+    pub(crate) fn time_zone(&self) -> Option<crate::l3::time_date::TimeZoneOffset> {
+        self.time_zone
     }
     pub(crate) fn enable_sms_hub(&mut self, enabled: bool) {
         self.sms_hub_enabled = enabled;
@@ -317,7 +336,11 @@ impl LocalMessaging {
         let mut offers = Vec::new();
         for queued in self.store.pending_for(recipient)? {
             if !self.store.outgoing_owns_sms(queued.id)? {
-                offers.push(DeliveryOffer { recipient, queued });
+                offers.push(DeliveryOffer {
+                    recipient,
+                    queued,
+                    time_zone: self.time_zone,
+                });
             }
         }
         Ok(offers)
@@ -440,6 +463,7 @@ impl LocalMessaging {
                 delivery = Some(DeliveryOffer {
                     recipient: subscriber.provisioning.identity,
                     queued,
+                    time_zone: self.time_zone,
                 });
                 break;
             }

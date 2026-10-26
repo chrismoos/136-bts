@@ -1687,7 +1687,8 @@ mod tests {
             TrafficRelay::from_addressed(
                 &crate::core::messaging::DeliveryOffer {
                     recipient: MobileIdentity::Min34(2),
-                    queued: pending[0].clone()
+                    queued: pending[0].clone(),
+                    time_zone: None,
                 }
                 .relay(0)
             )
@@ -1696,7 +1697,8 @@ mod tests {
         assert!(
             crate::core::messaging::DeliveryOffer {
                 recipient: MobileIdentity::Min34(2),
-                queued: pending[0].clone()
+                queued: pending[0].clone(),
+                time_zone: None,
             }
             .relay(0)
             .encode(Direction::Forward)

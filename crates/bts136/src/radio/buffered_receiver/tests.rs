@@ -107,8 +107,8 @@ fn blocked_backend_read_cannot_block_serving_and_stop_joins_the_reader() {
     );
     thread::sleep(Duration::from_millis(10));
     assert!(
-        reads.load(Ordering::Relaxed) <= 2,
-        "RX prefetch grew beyond one reusable buffer"
+        reads.load(Ordering::Relaxed) <= WORKER_BUFFERS + 1,
+        "RX prefetch grew beyond the reusable buffers"
     );
     receiver.stop().unwrap();
     assert!(receiver.stop_acknowledged());
@@ -133,6 +133,30 @@ fn worker_failure_is_reported_and_hardware_stop_is_acknowledged() {
         thread::yield_now();
     }
     assert_eq!(receiver.state(), receiver::State::Failed);
+    receiver.stop().unwrap();
+    assert!(receiver.stop_acknowledged());
+    assert!(!active.load(Ordering::Acquire));
+}
+#[test]
+fn taken_feed_delivers_contiguous_blocks_and_recycles_buffers() {
+    let active = Arc::new(AtomicBool::new(false));
+    let mut receiver = receiver(Device {
+        active: active.clone(),
+        reads: Arc::new(AtomicUsize::new(0)),
+        gate: None,
+        fail: false,
+    });
+    let feed = receiver.take_feed().unwrap();
+    assert!(receiver.take_feed().is_none());
+    let mut buffer = [Complex32::new(0.0, 0.0); 8];
+    assert!(receiver.read(&mut buffer).is_err());
+    for expected in 0..WORKER_BUFFERS as u64 * 2 {
+        let received = feed.recv_timeout(TEST_DEADLINE).unwrap().unwrap();
+        assert_eq!(received.block.first_sample, expected * 8);
+        assert_eq!(received.block.samples_read, 8);
+        feed.recycle(received.samples).unwrap();
+    }
+    drop(feed);
     receiver.stop().unwrap();
     assert!(receiver.stop_acknowledged());
     assert!(!active.load(Ordering::Acquire));

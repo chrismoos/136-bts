@@ -23,6 +23,7 @@ fn stale_rx_metadata_is_discarded_without_stalling_the_transmit_timeline() {
     let shutdown = Arc::new(AtomicBool::new(false));
     let state = Arc::new(Mutex::new(Backend {
         sample: 0,
+        clock_sample: 0,
         tx_observation_offset_ticks: STALE_CLOCK_SECONDS * TICKS,
         epoch: None,
         tx: Vec::new(),

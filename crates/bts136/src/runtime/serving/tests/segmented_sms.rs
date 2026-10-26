@@ -88,6 +88,7 @@ fn generated_segmented_sms_submission_iq_is_durably_stored_and_acknowledged() {
     let shutdown = Arc::new(AtomicBool::new(false));
     let state = Arc::new(Mutex::new(Backend {
         sample: 0,
+        clock_sample: 0,
         tx_observation_offset_ticks: 0,
         epoch: None,
         tx: Vec::new(),
@@ -527,6 +528,7 @@ fn exchange(
     handsets.retirement = retirement;
     let state = Arc::new(Mutex::new(Backend {
         sample: 0,
+        clock_sample: 0,
         tx_observation_offset_ticks: 0,
         epoch: None,
         tx: Vec::new(),

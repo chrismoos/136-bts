@@ -453,3 +453,22 @@ fn nonvoice_services_use_null_legacy_voice_coder() {
         );
     }
 }
+#[test]
+fn origination_keeps_understood_elements_before_a_reserved_parameter() {
+    let bytes = [0x07, 0x40, 0x18, 0x08, 0xaa, 0xa9, 0x62, 0x28, 0x01, 0x00];
+    let decoded = OriginationRequest::decode(&bytes).unwrap();
+    assert_eq!(
+        decoded.message.called_party.address,
+        AddressValue::Tbcd("1555".into())
+    );
+    assert_eq!(decoded.message.service_code, ServiceCode::DigitalSpeech);
+    assert_eq!(
+        decoded.options.voices,
+        [LegacyVoice {
+            coder: 2,
+            privacy: 0
+        }]
+    );
+    assert!(!decoded.options.unparsed_bits.is_empty());
+    assert_eq!(decoded.encode().unwrap(), bytes);
+}

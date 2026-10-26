@@ -141,6 +141,9 @@ impl Duplex {
             Err(error) => Err(Self::local(Failure::Tx(Box::new(error)))),
         }
     }
+    pub(crate) fn take_rx_feed(&mut self) -> Option<super::buffered_receiver::Feed> {
+        self.rx.take_feed()
+    }
     pub fn read(&mut self, buffer: &mut [Complex32]) -> Result<ReadOutcome, Error> {
         if self.state != State::Running {
             return Err(Self::local(Failure::State));

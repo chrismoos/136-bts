@@ -1,5 +1,5 @@
 pub mod access_rx;
-mod buffered_receiver;
+pub(crate) mod buffered_receiver;
 pub mod carrier;
 pub mod duplex;
 pub mod forward_tx;

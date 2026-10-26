@@ -1465,17 +1465,15 @@ impl CallSession {
         if matches!(self.state, CallState::Stopped(_)) {
             return Ok(());
         }
-        if matches!(reason, EndReason::RadioFailure(_)) {
-            self.state = CallState::Releasing(reason);
-            self.release_deadline_monotonic_ms = Some(monotonic_ms);
-            self.alert = None;
-            for leg in &mut self.legs {
-                leg.request_stop();
-            }
-            self.finish_stopped();
-            return Ok(());
+        // The lost leg stops at once. A surviving leg still needs a Release or it stays on the
+        // traffic channel until its own fade timer expires.
+        if let EndReason::RadioFailure(lost) = reason
+            && let Some(leg) = self.legs.iter_mut().find(|leg| leg.handle.party == lost)
+        {
+            leg.request_stop();
         }
         if matches!(self.state, CallState::Releasing(_)) {
+            self.finish_stopped();
             return Ok(());
         }
         let deadline = monotonic_ms

@@ -66,6 +66,7 @@ fn lost_continue_is_retransmitted_selectively_and_completes_exact_message_once()
         header,
         frame_number,
         data,
+        ..
     } = arq::decode(&retry.information).unwrap()
     else {
         panic!()

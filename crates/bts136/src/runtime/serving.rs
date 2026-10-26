@@ -17,22 +17,14 @@ use crate::{
     link::rach::Outcome,
     phy::{
         acquisition::reverse_stream::ReverseControlStream,
-        modulation::Symbol,
         pulse::SYMBOL_RATE_HZ,
         rach::BurstFormat,
         sync::SyncWord,
         traffic::{self, DATA_BITS, SACCH_BITS, SLOT_BITS},
     },
-    radio::{
-        PreparedRadio,
-        carrier::Carrier,
-        duplex::Duplex,
-        receiver::{self, ReadOutcome},
-        timed_tx,
-    },
+    radio::{PreparedRadio, carrier::Carrier, duplex::Duplex, receiver, timed_tx},
     scheduler::broadcast::{BroadcastClock, PHYSICAL_SLOTS, Position, Superframe},
 };
-use num_complex::Complex32;
 use registration_arq::Backlog;
 use std::{
     error::Error,
@@ -59,7 +51,8 @@ const PUBLIC_NETWORK: u8 = 0b100;
 const FBCCH_SLOTS: u8 = 4;
 // Short sample read timeouts break bladeRF RX streams.
 const RX_TIMEOUT_US: i64 = 250_000;
-const IDLE_WAIT_US: u64 = 100;
+// Decoded RX wakes the loop at once. This bounds the TX refill delay after a slot completes.
+const IDLE_WAIT: Duration = Duration::from_millis(1);
 // TIA-136-123-E Table 14 allows one superframe to prepare an R-DATA response.
 const MAX_RX_AGE_MS: u64 = super::timers::SUPERFRAME_MS;
 const CONTROL_SLOT_PERIOD: u64 = 3;
@@ -398,18 +391,18 @@ fn serve(
     let mut store_requests = store_requests;
     core.set_sms_hub_status(sms_hub.status.clone());
     let settings = prepared.settings();
-    let mut receive_window = crate::radio::receive_window::ReceiveWindow::try_new(
+    let receive_window = crate::radio::receive_window::ReceiveWindow::try_new(
         settings.tx_tick_rate_hz,
         settings.rx_tick_rate_hz,
         config.radio.device.rx_to_tx_delay_ns().unwrap_or(0),
         MAX_RX_AGE_MS,
     )?;
     let samples_per_symbol = settings.applied_tx_sample_rate_hz / SYMBOL_RATE_HZ as usize;
-    let mut traffic_reverse = crate::phy::acquisition::reverse_stream::ReverseStream::try_new(
+    let traffic_reverse = crate::phy::acquisition::reverse_stream::ReverseStream::try_new(
         settings.applied_rx_sample_rate_hz as f64,
         MAX_BURSTS,
     )?;
-    let mut reverse = ReverseControlStream::try_new_control(
+    let reverse = ReverseControlStream::try_new_control(
         settings.applied_rx_sample_rate_hz as f64,
         MAX_BURSTS,
         BurstFormat::Normal,
@@ -542,6 +535,7 @@ fn serve(
         .duration_since(std::time::UNIX_EPOCH)?
         .as_nanos()
         .to_string();
+    core.set_time_zone(initial_time.time_zone);
     let mut sms = super::sms::SmsRuntime::try_new(core, allocation, session_key)?;
     let MandatoryBroadcast::AccessParameters(parameters) = &messages[1] else {
         unreachable!("access parameters are second")
@@ -601,15 +595,10 @@ fn serve(
         time.time_zone = offset;
         snapshot.set_time_date(time)?;
     }
-    let mut iq = vec![Complex32::new(0.0, 0.0); reverse.max_read_samples()];
-    let mut symbols = vec![Symbol { i: 0.0, q: 0.0 }; iq.len()];
-    let mut bursts = Vec::with_capacity(MAX_BURSTS);
-    let mut shortened_reverse =
+    let shortened_reverse =
         crate::phy::acquisition::reverse_stream::ReverseStream::<
             crate::phy::shortened::ShortenedBurst,
         >::try_new_shortened(settings.applied_rx_sample_rate_hz as f64, MAX_BURSTS)?;
-    let mut shortened_bursts = Vec::with_capacity(MAX_BURSTS);
-    let mut traffic_bursts = Vec::with_capacity(MAX_BURSTS);
     tracing::info!(
         queued_slots = QUEUED_SLOTS,
         samples_per_slot = SYMBOLS_PER_SLOT * samples_per_symbol,
@@ -619,8 +608,8 @@ fn serve(
         startup_lead_ms = START_LEAD_MS,
         submission_margin_us = SLOT_SUBMISSION_LEAD_US,
         rx_backend_timeout_us = RX_TIMEOUT_US,
-        rx_worker_buffers = 1,
-        rx_poll_idle_us = IDLE_WAIT_US,
+        rx_worker_buffers = crate::radio::buffered_receiver::WORKER_BUFFERS,
+        rx_idle_wait_us = IDLE_WAIT.as_micros() as u64,
         "TX scheduling configured"
     );
     let mut receipts = Vec::with_capacity(QUEUED_SLOTS);
@@ -636,6 +625,23 @@ fn serve(
     let mut submitted: u64 = 0;
     let mut completed_registrations = 0;
     carrier.start_continuous(epoch, None)?;
+    let mut rx_dsp = super::reverse_dsp::ReverseDsp::spawn(
+        carrier.take_rx_feed().ok_or("RX feed unavailable")?,
+        receive_window,
+        super::reverse_dsp::Streams {
+            control: reverse,
+            traffic: traffic_reverse,
+            shortened: shortened_reverse,
+            max_bursts: MAX_BURSTS,
+        },
+        super::reverse_dsp::Clocks {
+            rx_sample_rate_hz: settings.applied_rx_sample_rate_hz as f64,
+            rx_tick_rate_hz: settings.rx_tick_rate_hz as f64,
+            tx_tick: observation.hardware_tick,
+        },
+        config.realtime,
+    )?;
+    let mut rx_generation = 0;
     tracing::info!(
         band = ?config.cell.band,
         channel = config.cell.channel,
@@ -658,9 +664,7 @@ fn serve(
     let mut last_frequency_offset_hz = None;
     let mut last_sync_correlation = None;
     let mut tx_diagnostics = diagnostics::Diagnostics::new();
-    let mut received = ReadOutcome::Timeout {
-        hardware_overflow: false,
-    };
+    let mut received: Option<super::reverse_dsp::Block> = None;
     let _scheduling = crate::realtime::apply(config.realtime, crate::realtime::Role::Tx);
     let result = (|| -> Result<(), Box<dyn Error>> {
         while !shutdown.load(Ordering::Relaxed)
@@ -675,6 +679,7 @@ fn serve(
                 broadcast_session.invalidate_through(submitted.saturating_sub(1) / PHYSICAL_SLOTS);
             }
             last_observation = observation;
+            rx_dsp.publish_tx_tick(last_observation.hardware_tick);
             let now_ms = protocol_clock.milliseconds(last_observation.hardware_tick)?;
             let unix_ms = unix_ms_at(protocol_unix_origin_ms, now_ms)?;
             timing.poll_us = diagnostics::micros(phase_started.elapsed());
@@ -703,9 +708,7 @@ fn serve(
                 }
                 if !allowed_before && broadcast_session.serving_allowed() {
                     access.discontinuity();
-                    reverse.discontinuity();
-                    shortened_reverse.discontinuity();
-                    traffic_reverse.discontinuity();
+                    rx_generation = rx_dsp.reset();
                     tracing::info!(superframe, "Configured broadcast revision active");
                 }
                 match completion.completion {
@@ -812,13 +815,18 @@ fn serve(
             sms.advance(now_ms)?;
             timing.maintenance_us = diagnostics::micros(phase_started.elapsed());
             phase_started = Instant::now();
-            if let ReadOutcome::Block(block) = received {
+            rx_dsp.set_traffic(voice.needs_traffic_reception());
+            rx_dsp.set_shortened(voice.needs_initial_alignment());
+            if let Some(block) = received
+                .take()
+                .filter(|block| block.generation == rx_generation)
+            {
+                use super::reverse_dsp::Decoded;
                 use crate::radio::receive_window::Admission;
-                let admission = receive_window.admit(&block, last_observation.hardware_tick)?;
-                let (accepted, reset) = match admission {
+                let (accepted, reset) = match block.admission {
                     Admission::Accept { segment, reset } => {
                         if reset {
-                            tracing::warn!(continuity=?block.continuity,"RX discontinuity resets receive contexts");
+                            tracing::warn!("RX discontinuity resets receive contexts");
                         }
                         (Some(segment), reset)
                     }
@@ -839,43 +847,13 @@ fn serve(
                     last_frequency_offset_hz = None;
                     last_sync_correlation = None;
                     access.discontinuity();
-                    reverse.discontinuity();
-                    traffic_reverse.discontinuity();
-                    shortened_reverse.discontinuity();
                 }
                 if let Some(rx_segment) = accepted {
-                    if interface.is_some() && block.samples_read != 0 {
-                        let power = iq[..block.samples_read]
-                            .iter()
-                            .map(|value| f64::from(value.norm_sqr()))
-                            .sum::<f64>()
-                            / block.samples_read as f64;
-                        rx_power_dbfs = (power > 0.0).then(|| 10.0 * power.log10());
+                    if interface.is_some() && block.power_dbfs.is_some() {
+                        rx_power_dbfs = block.power_dbfs;
                     }
-                    for (symbol, value) in symbols.iter_mut().zip(&iq[..block.samples_read]) {
-                        *symbol = Symbol {
-                            i: f64::from(value.re),
-                            q: f64::from(value.im),
-                        };
-                    }
-                    reverse.push(
-                        rx_segment,
-                        block.first_sample,
-                        &symbols[..block.samples_read],
-                        &mut bursts,
-                    )?;
                     if voice.needs_initial_alignment() {
-                        shortened_reverse.push(
-                            rx_segment,
-                            block.first_sample,
-                            &symbols[..block.samples_read],
-                            &mut shortened_bursts,
-                        )?;
-                        for burst in shortened_bursts.drain(..) {
-                            let sample_delta = burst.first_sample - block.first_sample as f64;
-                            let rx_tick = block.time_ticks as f64
-                                + sample_delta * settings.rx_tick_rate_hz as f64
-                                    / settings.applied_rx_sample_rate_hz as f64;
+                        for Decoded { burst, rx_tick } in block.shortened {
                             let relative_seconds =
                                 config.radio.device.rx_to_tx_delay_ns().unwrap_or(0) as f64
                                     / 1_000_000_000.0
@@ -897,27 +875,16 @@ fn serve(
                                 tracing::debug!(%error, "shortened burst rejected");
                             }
                         }
-                    } else {
-                        shortened_reverse.discontinuity();
                     }
-                    if voice.needs_traffic_reception() {
-                        traffic_reverse.push(
-                            rx_segment,
-                            block.first_sample,
-                            &symbols[..block.samples_read],
-                            &mut traffic_bursts,
-                        )?;
+                    let traffic = if voice.needs_traffic_reception() {
+                        block.traffic
                     } else {
-                        traffic_reverse.discontinuity();
-                    }
-                    traffic_burst_count += traffic_bursts.len() as u64;
-                    for burst in traffic_bursts.drain(..) {
+                        Vec::new()
+                    };
+                    traffic_burst_count += traffic.len() as u64;
+                    for Decoded { burst, rx_tick } in traffic {
                         last_frequency_offset_hz = Some(burst.acquired.frequency_offset_hz);
                         last_sync_correlation = Some(burst.acquired.sync_correlation);
-                        let sample_delta = burst.first_sample - block.first_sample as f64;
-                        let rx_tick = block.time_ticks as f64
-                            + sample_delta * settings.rx_tick_rate_hz as f64
-                                / settings.applied_rx_sample_rate_hz as f64;
                         let relative_seconds = config.radio.device.rx_to_tx_delay_ns().unwrap_or(0)
                             as f64
                             / 1_000_000_000.0
@@ -941,17 +908,13 @@ fn serve(
                             tracing::warn!(%error,"reverse traffic rejected");
                         }
                     }
-                    access_burst_count += bursts.len() as u64;
-                    for burst in bursts.drain(..) {
+                    access_burst_count += block.access.len() as u64;
+                    for Decoded { burst, rx_tick } in block.access {
                         if let Some(interface) = interface.as_ref() {
                             interface.hub.protocol.quality(None, &burst.acquired);
                         }
                         last_frequency_offset_hz = Some(burst.acquired.frequency_offset_hz);
                         last_sync_correlation = Some(burst.acquired.sync_correlation);
-                        let sample_delta = burst.first_sample - block.first_sample as f64;
-                        let rx_tick = block.time_ticks as f64
-                            + sample_delta * settings.rx_tick_rate_hz as f64
-                                / settings.applied_rx_sample_rate_hz as f64;
                         let relative_seconds = config.radio.device.rx_to_tx_delay_ns().unwrap_or(0)
                             as f64
                             / 1_000_000_000.0
@@ -1107,6 +1070,7 @@ fn serve(
                                             tracing::warn!(identity=%set.identity, %error, "Call access identity validation failed");
                                             let cause = match error {
                                                 crate::core::messaging::MessagingError::Registry(crate::core::registry::RegistryError::CallAdmission(error)) => error.reject_cause(),
+                                                crate::core::messaging::MessagingError::Registry(crate::core::registry::RegistryError::Options(_)) => crate::l3::registration::RejectCause::Unknown,
                                                 _ => crate::l3::registration::RejectCause::UnknownMsid,
                                             };
                                             voice.reject_access(set.identity, cause, now_ms)?;
@@ -1276,7 +1240,7 @@ fn serve(
                                 sync_level_dbfs=?burst.acquired.quality.map(|quality|quality.sync_level_dbfs),
                                 rx_tick, next_forward_slot=submitted, rx_segment,
                                 rx_block_first_sample=block.first_sample, rx_block_time_ticks=block.time_ticks,
-                                burst_first_sample=burst.first_sample, rx_sample_offset=sample_delta,
+                                burst_first_sample=burst.first_sample, rx_sample_offset=burst.first_sample - block.first_sample as f64,
                                 rx_to_tx_delay_ns=config.radio.device.rx_to_tx_delay_ns().unwrap_or(0), tx_epoch_tick=epoch,
                                 "access burst rejected")
                             }
@@ -1428,6 +1392,7 @@ fn serve(
                         structure.fbcch_slots + structure.ebcch_slots - 1,
                         now_ms,
                     )?;
+                    sms.core_mut().set_time_zone(time.time_zone);
                     if broadcast_session.set_time_zone(time.time_zone)? {
                         tracing::info!(
                             utc_offset_minutes = time.time_zone.minutes(),
@@ -1820,12 +1785,7 @@ fn serve(
             }
             timing.publication_us = diagnostics::micros(phase_started.elapsed());
             phase_started = Instant::now();
-            received = carrier.read(&mut iq)?;
-            timing.rx_read_us = diagnostics::micros(phase_started.elapsed());
-            phase_started = Instant::now();
-            if matches!(received, ReadOutcome::Timeout { .. }) {
-                std::thread::sleep(Duration::from_micros(IDLE_WAIT_US));
-            }
+            received = rx_dsp.recv_timeout(IDLE_WAIT)?;
             timing.idle_wait_us = diagnostics::micros(phase_started.elapsed());
             tx_diagnostics.finish(loop_started, timing, carrier.pending_slots(), skipped_slots);
         }
@@ -1834,6 +1794,7 @@ fn serve(
     if let Err(error) = &result {
         tracing::error!(%error, "serving loop failed, stopping the cell");
     }
+    rx_dsp.stop();
     let stopped = carrier.stop();
     backlog.shutdown(
         interface

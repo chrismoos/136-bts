@@ -78,7 +78,6 @@ pub enum CallError {
     Origination(OriginationError),
     MissingOrigination,
     DuplicateOrigination,
-    OptionalElements,
     Options(access_call::OptionsError),
     Admission(AdmissionError),
     Service(ServiceCode),
@@ -273,13 +272,7 @@ fn originating_request(
         .iter()
         .find(|bytes| bytes.first() == Some(&access_call::ORIGINATION_TYPE))
         .ok_or(CallError::MissingOrigination)?;
-    let decoded = OriginationRequest::decode(primary).map_err(|error| {
-        if error == access_call::OptionsError::Field("optional_reserved") {
-            CallError::OptionalElements
-        } else {
-            CallError::Options(error)
-        }
-    })?;
+    let decoded = OriginationRequest::decode(primary).map_err(CallError::Options)?;
     access_call::validate_companions(
         set,
         access_call::Kind::Origination,
@@ -537,7 +530,7 @@ mod tests {
         new.release(&new_call.handle).unwrap();
     }
     #[test]
-    fn wire_origination_admission_rejects_duplicates_reserved_fields_and_unimplemented_services() {
+    fn wire_origination_admission_rejects_duplicates_and_unimplemented_services() {
         let registry = registered_registry(&[1, 2]);
         let mut calls = call_reservations();
         let request = request();
@@ -546,12 +539,6 @@ mod tests {
         assert!(matches!(
             calls.originate(&registry, &duplicate),
             Err(CallError::DuplicateOrigination)
-        ));
-        let mut extension = set(&request);
-        extension.messages[0].push(0);
-        assert!(matches!(
-            calls.originate(&registry, &extension),
-            Err(CallError::OptionalElements)
         ));
         let mut analog = request.clone();
         analog.service_code = ServiceCode::AnalogSpeech;
@@ -563,6 +550,16 @@ mod tests {
         let mut emergency = request.clone();
         emergency.emergency_call = true;
         let admitted = calls.originate(&registry, &set(&emergency)).unwrap();
+        assert_eq!(admitted.callee.number, "1002");
+    }
+    #[test]
+    fn wire_origination_with_a_trailing_reserved_parameter_is_admitted() {
+        let registry = registered_registry(&[1, 2]);
+        let mut calls = call_reservations();
+        let mut extension = set(&request());
+        extension.messages[0].push(0x01);
+        extension.messages[0].push(0);
+        let admitted = calls.originate(&registry, &extension).unwrap();
         assert_eq!(admitted.callee.number, "1002");
     }
     #[test]

@@ -314,6 +314,9 @@ impl<T> Carrier<T> {
         }
         Ok(observation)
     }
+    pub(crate) fn take_rx_feed(&mut self) -> Option<super::buffered_receiver::Feed> {
+        self.radio.take_rx_feed()
+    }
     pub fn read(&mut self, buffer: &mut [Complex32]) -> Result<ReadOutcome, Error> {
         self.radio.read(buffer).map_err(Error::Radio)
     }

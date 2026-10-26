@@ -8,10 +8,11 @@ use crate::{
     phy::{
         acquisition::decode_forward_control,
         control::LogicalChannel,
-        modulation::{Dibit, DifferentialEncoder},
+        modulation::{Dibit, DifferentialEncoder, Symbol},
         pulse::RootRaisedCosine,
     },
 };
+use num_complex::Complex32;
 use sdr_hal::{Radio, RadioRx, RadioTx, RxReadResult, error::Error as HalError};
 use std::{
     path::PathBuf,
@@ -28,6 +29,9 @@ const FILTER_SPAN: usize = 8;
 const ACCESS_BLOCK: u64 = 10;
 const ACCESS_PATH_BLOCKS: u64 = 6;
 const REVERSE_LEAD_SYMBOLS: usize = 207;
+const RX_TX_LEAD_SLOTS: usize = 1;
+const RX_GATE_WAIT_US: u64 = 100;
+const RX_GATE_LIMIT: Duration = Duration::from_millis(50);
 const STOP_SLOTS: usize = 192;
 mod arq_loop;
 mod broadcast_recovery;
@@ -38,6 +42,9 @@ mod sms_loop;
 mod voice_loop;
 struct Backend {
     sample: usize,
+    /// Start of the newest RX block. Each block reaches the serving loop before the clock
+    /// passes it, so a burst is handled before the TX refill its clock advance releases.
+    clock_sample: usize,
     tx_observation_offset_ticks: u64,
     epoch: Option<usize>,
     tx: Vec<Complex32>,
@@ -59,7 +66,7 @@ struct Backend {
 }
 struct Device(Arc<Mutex<Backend>>);
 struct Tx(Arc<Mutex<Backend>>);
-struct Rx(Arc<Mutex<Backend>>);
+struct Rx(Arc<Mutex<Backend>>, Option<Instant>);
 impl Radio for Device {
     fn tx_sample_rate_hz(&self) -> f64 {
         RATE as f64
@@ -83,7 +90,10 @@ impl Radio for Device {
         Ok(())
     }
     fn split(self: Box<Self>) -> Result<(Box<dyn RadioTx>, Option<Box<dyn RadioRx>>), HalError> {
-        Ok((Box::new(Tx(self.0.clone())), Some(Box::new(Rx(self.0)))))
+        Ok((
+            Box::new(Tx(self.0.clone())),
+            Some(Box::new(Rx(self.0, None))),
+        ))
     }
 }
 impl RadioTx for Tx {
@@ -98,7 +108,8 @@ impl RadioTx for Tx {
     }
     fn get_hardware_time(&self) -> Result<u64, HalError> {
         let state = self.0.lock().unwrap();
-        Ok((state.sample as u64 * TICKS).div_ceil(RATE as u64) + state.tx_observation_offset_ticks)
+        Ok((state.clock_sample as u64 * TICKS).div_ceil(RATE as u64)
+            + state.tx_observation_offset_ticks)
     }
     fn set_tx_frequency_hz(&mut self, _: f64) -> Result<(), HalError> {
         Ok(())
@@ -187,7 +198,7 @@ impl RadioRx for Rx {
         TICKS
     }
     fn get_hardware_time(&self) -> Result<u64, HalError> {
-        Ok((self.0.lock().unwrap().sample as u64 * TICKS).div_ceil(RATE as u64))
+        Ok((self.0.lock().unwrap().clock_sample as u64 * TICKS).div_ceil(RATE as u64))
     }
     fn set_rx_frequency(&mut self, _: f64) -> Result<(), HalError> {
         Ok(())
@@ -213,6 +224,26 @@ impl RadioRx for Rx {
         }
         let mut state = self.0.lock().unwrap();
         let first = state.sample;
+        // The simulated clock is the RX sample count. It must stay behind the scheduled TX
+        // samples, as a device clock does, or it outruns the TX queue and the handset replies.
+        let scheduled_end = state
+            .epoch
+            .map(|epoch| epoch - FILTER_SPAN * SAMPLES_PER_SYMBOL + state.tx.len());
+        let gated = scheduled_end.is_none_or(|end| {
+            first + buffer.len() + RX_TX_LEAD_SLOTS * SYMBOLS_PER_SLOT * SAMPLES_PER_SYMBOL > end
+        });
+        // A stalled TX schedule does not hold back a device clock.
+        let waited = *self.1.get_or_insert_with(Instant::now);
+        if gated && waited.elapsed() < RX_GATE_LIMIT {
+            drop(state);
+            std::thread::sleep(Duration::from_micros(RX_GATE_WAIT_US));
+            return Ok(RxReadResult {
+                samples_read: 0,
+                time_ticks: 0,
+                overflow: false,
+            });
+        }
+        self.1 = None;
         buffer.fill(Complex32::new(0.0, 0.0));
         if let Some(epoch) = state.epoch {
             for (physical_slot, advance_samples, packet) in state
@@ -235,6 +266,7 @@ impl RadioRx for Rx {
                 mix_overlap(buffer, first, packet, start);
             }
         }
+        state.clock_sample = first;
         state.sample += buffer.len();
         Ok(RxReadResult {
             samples_read: buffer.len(),
@@ -638,6 +670,7 @@ fn registration_companion_loop(
     }
     let state = Arc::new(Mutex::new(Backend {
         sample: 0,
+        clock_sample: 0,
         tx_observation_offset_ticks: 0,
         epoch: None,
         tx: Vec::new(),
@@ -1200,6 +1233,7 @@ fn generated_sms_submission_loop(external: bool) {
     let shutdown = Arc::new(AtomicBool::new(false));
     let state = Arc::new(Mutex::new(Backend {
         sample: 0,
+        clock_sample: 0,
         tx_observation_offset_ticks: 0,
         epoch: None,
         tx: Vec::new(),

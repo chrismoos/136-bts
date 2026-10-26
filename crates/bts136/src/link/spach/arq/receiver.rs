@@ -83,6 +83,7 @@ impl ArqReassembler {
             }
             ArqFrame::Continue {
                 header,
+                identity_type,
                 frame_number,
                 data,
             } => {
@@ -91,6 +92,7 @@ impl ArqReassembler {
                 };
                 if header.partial_echo != transaction.header.partial_echo
                     || header.channel != transaction.header.channel
+                    || identity_type != transaction.identity.parts().0
                 {
                     return Ok(Reception::Ignored);
                 }
@@ -237,6 +239,7 @@ mod tests {
         receiver.push(&frames[0].encode().unwrap()).unwrap();
         let ArqFrame::Continue {
             header: mut other,
+            identity_type,
             frame_number,
             data,
         } = frames[1].clone()
@@ -246,6 +249,7 @@ mod tests {
         other.partial_echo += 1;
         let unrelated = ArqFrame::Continue {
             header: other,
+            identity_type,
             frame_number,
             data,
         };

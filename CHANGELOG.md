@@ -1,5 +1,8 @@
 # HEAD
 
+- Improve SMS delivery, add timestamp to SMS.
+- Improve call reliability, fix ending calls, and fix calls from the Motorola StarTAC.
+- Improve performance of RX processing.
 - Fix timestamp issue on LimeSDR and bladeRF.
 - TX and RX threads request real-time scheduling, with configurable Linux priorities and macOS time constraints.
 - Slow console output no longer blocks daemon operation.

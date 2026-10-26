@@ -465,6 +465,10 @@ impl CallOptions {
                 break;
             }
             let start = r.offset;
+            if r.bits.len() - r.offset < PARAMETER_BITS {
+                result.unparsed_bits = r.bits[start..].to_vec();
+                break;
+            }
             let code = r.take(PARAMETER_BITS)? as u8;
             let aux = if code == EXTENSION {
                 Some(r.take(PARAMETER_BITS)? as u8)
@@ -475,11 +479,14 @@ impl CallOptions {
                 || (kind == Kind::Origination
                     && matches!(code, CALLED_SUBADDRESS | CALLING_SUBADDRESS))
                 || aux.is_some_and(|aux| aux == kind.extended_voice() || aux == kind.system());
+            // TIA-136-123-E §5 accepts a message longer than the receiver understands and discards
+            // the rest, so a reserved code ends parsing instead of rejecting the message.
             if code == RESERVED_PARAMETER
                 || code == FUTURE_PARAMETER
                 || aux.is_some_and(|aux| aux == RESERVED_PARAMETER || aux == FUTURE_PARAMETER)
             {
-                return Err(OptionsError::Field("optional_reserved"));
+                result.unparsed_bits = r.bits[start..].to_vec();
+                break;
             }
             if !known {
                 // TIA-136-123-E §5 skips noncritical IEs by length and accepts the prefix before unknown critical IEs.

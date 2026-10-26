@@ -48,7 +48,6 @@ pub enum PagingError {
     NotTransmitted,
     MissingResponse,
     DuplicateResponse,
-    OptionalElements,
     Options(crate::l3::access_call::OptionsError),
     Admission(crate::l3::access_call::AdmissionError),
     Service,
@@ -424,14 +423,8 @@ fn decode_response(set: &MessageSet) -> Result<PageResponse, PagingError> {
         .iter()
         .find(|bytes| bytes.first() == Some(&crate::l3::access_call::PAGE_RESPONSE_TYPE))
         .ok_or(PagingError::MissingResponse)?;
-    let decoded =
-        crate::l3::access_call::PageResponseRequest::decode(primary).map_err(|error| {
-            if error == crate::l3::access_call::OptionsError::Field("optional_reserved") {
-                PagingError::OptionalElements
-            } else {
-                PagingError::Options(error)
-            }
-        })?;
+    let decoded = crate::l3::access_call::PageResponseRequest::decode(primary)
+        .map_err(PagingError::Options)?;
     crate::l3::access_call::validate_companions(
         set,
         crate::l3::access_call::Kind::PageResponse,
@@ -669,14 +662,11 @@ mod tests {
         wrong.identity = MobileIdentity::Min34(1);
         let mut duplicate = digital.clone();
         duplicate.messages.push(duplicate.messages[0].clone());
-        let mut extension = digital.clone();
-        extension.messages[0].push(0);
         let mut truncated = digital.clone();
         truncated.messages[0].truncate(2);
         for (set, expected) in [
             (wrong, PagingError::Recipient),
             (duplicate, PagingError::DuplicateResponse),
-            (extension, PagingError::OptionalElements),
             (response(ServiceCode::AnalogSpeech), PagingError::Service),
         ] {
             assert!(

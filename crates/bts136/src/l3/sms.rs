@@ -30,6 +30,11 @@ pub const MAX_SINGLE_RELAY_USER_OCTETS: usize = super::relay::MAX_DATA_PAYLOAD_O
 pub const MAX_SINGLE_RELAY_IRA_CHARACTERS: usize = MAX_SINGLE_RELAY_USER_OCTETS;
 pub const MAX_SINGLE_RELAY_BMP_CHARACTERS: usize = MAX_SINGLE_RELAY_USER_OCTETS / 2;
 const MAX_USER_OCTETS: usize = 254;
+// TIA-136-710-C §4.12: Parameter Type 0010, 32-bit seconds since 1980-01-01 GMT, 12-bit zone.
+const TIME_STAMP_PARAMETER: u64 = 0b0010;
+const TIME_STAMP_SECONDS_SHIFT: u32 = 12;
+const TIME_STAMP_PARAMETER_SHIFT: u32 = 44;
+const TIME_STAMP_OCTETS: usize = 6;
 pub(crate) const MAX_SUBMIT_PDU_OCTETS: usize =
     HEADER_OCTETS + UNIT_HEADER_OCTETS + MAX_USER_OCTETS;
 
@@ -163,6 +168,31 @@ impl SmsMessage {
         bytes.extend(user_data.encode()?);
         Ok(bytes)
     }
+}
+/// Appends a Message Center Time Stamp to an SMS DELIVER with no optional elements.
+/// Returns `None` when the PDU is not such a DELIVER, the time precedes 1980 or the result
+/// would not fit in one R-DATA.
+pub fn with_time_stamp(
+    pdu: &[u8],
+    received_unix_ms: i64,
+    time_zone: super::time_date::TimeZoneOffset,
+) -> Option<Vec<u8>> {
+    let decoded = decode_prefix(pdu, Direction::Forward).ok()?;
+    if !matches!(decoded.message, SmsMessage::Deliver { .. })
+        || !decoded.optional_octets.is_empty()
+        || pdu.len() + TIME_STAMP_OCTETS > super::relay::MAX_DATA_PAYLOAD_OCTETS
+    {
+        return None;
+    }
+    let seconds =
+        u32::try_from(received_unix_ms.div_euclid(1000) - super::time_date::UNIX_TO_1980_SECONDS)
+            .ok()?;
+    let value = TIME_STAMP_PARAMETER << TIME_STAMP_PARAMETER_SHIFT
+        | u64::from(seconds) << TIME_STAMP_SECONDS_SHIFT
+        | u64::from(time_zone.bits());
+    let mut stamped = pdu.to_vec();
+    stamped.extend_from_slice(&value.to_be_bytes()[u64::BITS as usize / 8 - TIME_STAMP_OCTETS..]);
+    Some(stamped)
 }
 pub fn decode_prefix(bytes: &[u8], direction: Direction) -> Result<DecodedSms, SmsError> {
     let reference = bytes.get(..REFERENCE_OCTETS).ok_or(SmsError::Truncated)?;
@@ -440,5 +470,34 @@ mod international_tests {
                 assert_eq!(decoded.optional_octets, [0x80, 0x11]);
             }
         }
+    }
+
+    #[test]
+    fn deliver_time_stamp_follows_the_user_data_unit() {
+        let deliver = SmsMessage::Deliver {
+            metadata: Metadata {
+                message_reference: 1,
+                privacy: 0,
+                urgency: NORMAL_URGENCY,
+                delivery_acknowledgment: false,
+                manual_acknowledgment: false,
+                new_message: true,
+            },
+            validity: Validity::Indefinite,
+            display_time: DisplayTime::Default,
+            user_data: UserData::Ira(b"hi".to_vec()),
+        }
+        .encode()
+        .unwrap();
+        let received_ms = 1_792_983_066_105;
+        let zone = crate::l3::time_date::TimeZoneOffset::try_new(-420, true).unwrap();
+        let stamped = with_time_stamp(&deliver, received_ms, zone).unwrap();
+        assert_eq!(&stamped[..deliver.len()], deliver.as_slice());
+        let seconds = (received_ms / 1000 - crate::l3::time_date::UNIX_TO_1980_SECONDS) as u64;
+        let expected = (0b0010u64 << 44 | seconds << 12 | u64::from(zone.bits())).to_be_bytes();
+        assert_eq!(&stamped[deliver.len()..], &expected[2..]);
+        let decoded = decode_prefix(&stamped, Direction::Forward).unwrap();
+        assert_eq!(decoded.optional_octets, &expected[2..]);
+        assert!(with_time_stamp(&stamped, received_ms, zone).is_none());
     }
 }

@@ -71,6 +71,7 @@ impl PhysicalControlRequest {
                 (TimeAlignment::Maintain, Some(TimeAlignment::OffsetUnits(units))) => {
                     units <= MAX_ALIGNMENT_UNITS
                 }
+                (TimeAlignment::Maintain, Some(TimeAlignment::Maintain)) => true,
                 (
                     TimeAlignment::OffsetUnits(requested),
                     Some(TimeAlignment::OffsetUnits(actual)),
@@ -110,7 +111,11 @@ impl PhysicalControlFields {
         if report.control.power_level.is_some() {
             self.control.power_level = report.control.power_level;
         }
-        if report.control.time_alignment.is_some() {
+        if report
+            .control
+            .time_alignment
+            .is_some_and(|value| value != TimeAlignment::Maintain)
+        {
             self.control.time_alignment = report.control.time_alignment;
         }
         if report.control.delay_compensation.is_some() {
@@ -132,16 +137,10 @@ impl PhysicalControlFields {
         }
         self.unparsed_bits.clone_from(&report.unparsed_bits);
     }
-    pub(super) fn encode_octets(
-        &self,
-        acknowledgment: bool,
-    ) -> Result<Vec<u8>, TrafficMessageError> {
+    pub(super) fn encode_octets(&self) -> Result<Vec<u8>, TrafficMessageError> {
         self.control.validate()?;
         if self.control.dtx_allowed.is_some() && self.dtx_mode.is_some() {
             return Err(TrafficMessageError::Field("conflicting_dtx_control"));
-        }
-        if acknowledgment && self.control.time_alignment == Some(TimeAlignment::Maintain) {
-            return Err(TrafficMessageError::Field("ack_time_alignment"));
         }
         let mut bits = Vec::new();
         if let Some(value) = self.control.power_level {
@@ -188,10 +187,7 @@ impl PhysicalControlFields {
 }
 
 // TIA-136-133-E §§5.1.2.2.7 and 9.1.2.2.6 use counted optional fields and octet padding.
-pub(super) fn decode(
-    octets: &[u8],
-    acknowledgment: bool,
-) -> Result<PhysicalControlFields, TrafficMessageError> {
+pub(super) fn decode(octets: &[u8]) -> Result<PhysicalControlFields, TrafficMessageError> {
     let bits: Vec<_> = octets
         .iter()
         .flat_map(|octet| {
@@ -259,9 +255,8 @@ pub(super) fn decode(
     if fields.control.dtx_allowed.is_some() && fields.dtx_mode.is_some() {
         return Err(TrafficMessageError::Field("conflicting_dtx_control"));
     }
-    if acknowledgment && fields.control.time_alignment == Some(TimeAlignment::Maintain) {
-        return Err(TrafficMessageError::Field("ack_time_alignment"));
-    }
+    // TIA-136-133-E §4.4.2 forbids Maintain in an acknowledgment, but handsets send it. It
+    // reports no change, so the acknowledgment is still accepted.
     Ok(fields)
 }
 

@@ -14,7 +14,7 @@ unsafe_code = "forbid"
 [workspace.dependencies]
 serde = { version = "1", features = ["derive"] }
 serde_yaml_ng = "0.10"
-sdr-hal = { version = "0.1", features = ["config"] }
+sdr-hal = { version = "0.1", features = ["config", "dsp"] }
 rusqlite = { version = "0.40.2", features = ["bundled", "backup", "hooks"] }
 num-complex = "0.4"
 tracing = "0.1"
