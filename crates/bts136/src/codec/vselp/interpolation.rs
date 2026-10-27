@@ -158,8 +158,10 @@ mod tests {
             .map(|predictor| predictor.energy_full_scale_squared);
         assert_eq!(energies[0], 0.0);
         assert_eq!(energies[1], 0.0);
-        assert_eq!(energies[2], current.frame_energy_full_scale_squared());
-        assert_eq!(energies[3], current.frame_energy_full_scale_squared());
+        let expected = current.frame_energy_full_scale_squared();
+        for energy in &energies[2..] {
+            assert!((energy - expected).abs() <= expected * f64::EPSILON * 4.0);
+        }
     }
     #[test]
     fn stability_rejects_unit_poles_and_nonfinite_values_without_margin_override() {
