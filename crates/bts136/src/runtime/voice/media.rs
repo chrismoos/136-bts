@@ -42,8 +42,8 @@ pub(super) fn offer(
     }
     let facch_pending = leg.tx.facch_pending();
     if leg.transcoding || ringing {
-        leg.media = None;
-        let incoming = leg.media_pcm.take();
+        leg.media.clear();
+        let incoming = leg.media_pcm.pop();
         if facch_pending {
             tones.pause(interval);
             return Ok(());
@@ -97,7 +97,7 @@ pub(super) fn offer(
         }
         return Ok(());
     }
-    let media = leg.media.take();
+    let media = leg.media.pop();
     let tone = if facch_pending {
         tones.pause(interval);
         None

@@ -9,6 +9,7 @@ mod measurements;
 mod media;
 mod overlap;
 mod paging;
+mod playout;
 mod sip;
 pub use paging::PageReceipt;
 mod queue;
@@ -140,8 +141,8 @@ struct Leg {
     next_rx: Option<u64>,
     in_flight: usize,
     last_rx_ms: u64,
-    media: Option<VselpParameters>,
-    media_pcm: Option<[f64; crate::codec::vselp::FRAME_SAMPLES]>,
+    media: playout::Playout<VselpParameters>,
+    media_pcm: playout::Playout<[f64; crate::codec::vselp::FRAME_SAMPLES]>,
     media_encoder: crate::codec::speech::Encoder,
     ringback_start: Option<u64>,
     transcoding: bool,
@@ -729,8 +730,8 @@ impl VoiceRuntime {
                 next_rx: None,
                 in_flight: 0,
                 last_rx_ms: now_ms,
-                media: None,
-                media_pcm: None,
+                media: Default::default(),
+                media_pcm: Default::default(),
                 media_encoder: crate::codec::speech::Encoder::new(codec),
                 ringback_start: None,
                 transcoding,
@@ -1223,8 +1224,8 @@ impl VoiceRuntime {
                 if let Some((_, offer)) = leg.sms_sacch.take() {
                     self.sms_interrupted.push_back(offer.token);
                 }
-                leg.media = None;
-                leg.media_pcm = None;
+                leg.media.clear();
+                leg.media_pcm.clear();
             }
         }
         Ok(())
@@ -1598,6 +1599,18 @@ impl VoiceRuntime {
                             "ms",
                         ));
                         measurements.push(metric("In-flight TX slots", leg.in_flight, ""));
+                        measurements.extend([
+                            metric(
+                                "Peer audio underruns",
+                                leg.media.underruns() + leg.media_pcm.underruns(),
+                                "",
+                            ),
+                            metric(
+                                "Peer audio overflows",
+                                leg.media.overflows() + leg.media_pcm.overflows(),
+                                "",
+                            ),
+                        ]);
                     }
                     CallLeg {
                         party: format!("{party:?}"),
@@ -2365,15 +2378,17 @@ impl VoiceRuntime {
                 && let Some(destination) = active.legs.get_mut(1 - index(party))
             {
                 if destination.transcoding {
-                    destination.media_pcm = Some(frame.samples);
-                } else if matches!(
-                    frame.kind,
-                    FrameKind::Speech {
-                        crc: CrcStatus::Valid,
-                        ..
-                    }
-                ) {
-                    destination.media = frame.parameters;
+                    destination.media_pcm.push(Some(frame.samples));
+                } else {
+                    destination.media.push(frame.parameters.filter(|_| {
+                        matches!(
+                            frame.kind,
+                            FrameKind::Speech {
+                                crc: CrcStatus::Valid,
+                                ..
+                            }
+                        )
+                    }));
                 }
             }
 
@@ -2582,8 +2597,8 @@ impl VoiceRuntime {
             }
             if !active.session.media_ready() {
                 active.dtmf[index(party)].clear();
-                leg.media = None;
-                leg.media_pcm = None;
+                leg.media.clear();
+                leg.media_pcm.clear();
             }
             if let Some(request) = active.session.stop_request(party).cloned() {
                 if leg.in_flight == 0 {

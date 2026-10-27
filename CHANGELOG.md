@@ -1,5 +1,6 @@
 # HEAD
 
+- Fix choppy audio on calls (one side only) between two phones.
 - Improve SMS delivery, add timestamp to SMS.
 - Improve call reliability, fix ending calls, and fix calls from the Motorola StarTAC.
 - Improve performance of RX processing.

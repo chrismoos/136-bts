@@ -382,9 +382,22 @@ fn call_alert_connect_voice_and_release_follow_coded_traffic_and_air_receipts() 
         160,
     );
     mobile.transmitted(&prepared).unwrap();
-    assert!(voice.active().unwrap().legs[0].media.is_some());
+    assert!(!voice.active().unwrap().legs[0].media.is_empty());
+    send(&mut voice, Party::Caller, 6 + extra_intervals, 162);
+    mobile
+        .offer_media(8 + extra_intervals, TransmitFrame::speech(&parameters))
+        .unwrap();
+    let incoming = mobile.prepare(8 + extra_intervals).unwrap().clone();
+    receive(
+        &mut voice,
+        Party::Callee,
+        8 + extra_intervals,
+        incoming.data(),
+        163,
+    );
+    mobile.transmitted(&incoming).unwrap();
     let (_, _, first) = voice
-        .traffic(physical(&voice, Party::Caller, 6 + extra_intervals))
+        .traffic(physical(&voice, Party::Caller, 7 + extra_intervals))
         .unwrap()
         .unwrap();
     let first_data = crate::phy::traffic::decode_forward(first.bits())
@@ -406,19 +419,19 @@ fn call_alert_connect_voice_and_release_follow_coded_traffic_and_air_receipts() 
         )
         .unwrap();
     mobile
-        .offer_media(8 + extra_intervals, TransmitFrame::speech(&parameters))
+        .offer_media(9 + extra_intervals, TransmitFrame::speech(&parameters))
         .unwrap();
-    let incoming = mobile.prepare(8 + extra_intervals).unwrap().clone();
+    let incoming = mobile.prepare(9 + extra_intervals).unwrap().clone();
     receive(
         &mut voice,
         Party::Callee,
-        8 + extra_intervals,
+        9 + extra_intervals,
         incoming.data(),
         170,
     );
     mobile.transmitted(&incoming).unwrap();
     let (_, _, second) = voice
-        .traffic(physical(&voice, Party::Caller, 7 + extra_intervals))
+        .traffic(physical(&voice, Party::Caller, 8 + extra_intervals))
         .unwrap()
         .unwrap();
     let second_data = crate::phy::traffic::decode_forward(second.bits())
@@ -448,7 +461,7 @@ fn call_alert_connect_voice_and_release_follow_coded_traffic_and_air_receipts() 
             information: Default::default(),
         })
         .unwrap();
-    for interval in [9, 10].map(|interval| interval + extra_intervals) {
+    for interval in [10, 11].map(|interval| interval + extra_intervals) {
         let prepared = mobile.prepare(interval).unwrap().clone();
         receive(
             &mut voice,
