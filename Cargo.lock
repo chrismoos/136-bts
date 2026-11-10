@@ -1715,9 +1715,9 @@ checksum = "94143f37725109f92c262ed2cf5e59bce7498c01bcc1502d7b9afe439a4e9f49"
 
 [[package]]
 name = "sdr-hal"
-version = "0.1.0"
+version = "0.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "24d677b1bada15f029896649b7179806fc1bcb04a588d3eff72b39c2b69adfcb"
+checksum = "c99d08ea73264ec6715ced7f800194ea12d3bf1fdfd0317b715a516c6338de10"
 dependencies = [
  "crossbeam-channel",
  "log",
